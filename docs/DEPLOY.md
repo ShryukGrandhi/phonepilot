@@ -16,7 +16,9 @@ docker compose up -d --build
 
 Caddy terminates TLS with an automatic Let's Encrypt certificate for
 `DOMAIN` and proxies to the app. The app runs as an unprivileged user with
-`/data` as the only writable volume.
+`/data` as the only writable volume. (The Dockerfile was written but not
+built on the development machine, which had no Docker daemon running; the
+non-Docker path below is what was exercised.)
 
 Without Docker:
 
