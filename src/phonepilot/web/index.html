@@ -12,6 +12,7 @@
     --sans:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;
   }
   *{box-sizing:border-box}
+  [hidden]{display:none!important}
   html,body{height:100%}
   body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);
     background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
@@ -192,6 +193,7 @@ function zoom(url){ $('lightbox-img').src = url; $('lightbox').style.display='fl
 // -------------------------------------------------------------- phone
 function setView(v){
   view = v; $('v-live').classList.toggle('on', v==='live'); $('v-agent').classList.toggle('on', v==='agent');
+  clearTimeout(frameTimer);
   if (v==='agent') showAgentView(); else scheduleFrames(true);
 }
 function showAgentView(){

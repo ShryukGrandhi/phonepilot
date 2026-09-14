@@ -69,11 +69,13 @@ class Hub:
 class AppState:
     """Owns the cloud client, one phone, and at most one running agent."""
 
-    def __init__(self, client: PhoneHarnessClient, brain: Brain, runs_dir: Path, max_steps: int = 25):
+    def __init__(self, client: PhoneHarnessClient, brain: Brain, runs_dir: Path, max_steps: int = 25,
+                 log: Callable[[str], None] | None = None):
         self.client = client
         self.brain = brain
         self.runs_dir = runs_dir
         self.max_steps = max_steps
+        self.terminal_log = log
         self.hub = Hub()
         self.lock = threading.Lock()
         self.session: Session | None = None
@@ -113,6 +115,8 @@ class AppState:
         return self._account
 
     def _log(self, text: str) -> None:
+        if self.terminal_log:
+            self.terminal_log(text)
         self.hub.publish("log", text=text)
 
     def _push_state(self) -> None:
@@ -355,7 +359,7 @@ def serve(
     open_browser: bool = True,
     log: Callable[[str], None] = print,
 ) -> None:
-    app = AppState(client, brain, runs_dir, max_steps)
+    app = AppState(client, brain, runs_dir, max_steps, log=log)
     server = make_server(app, host, port)
     url = f"http://{host}:{server.server_address[1]}/"
     log(f"PhonePilot web UI at {url}  (Ctrl-C to quit)")
