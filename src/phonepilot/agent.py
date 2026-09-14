@@ -27,7 +27,7 @@ from .brain.base import Action, Brain
 from .cloud import CloudError
 from .device import Device, changed_fraction
 from .observe import Observation, draw_marks, select_elements
-from .trace import RunMeta, Trace
+from .trace import RunMeta, StepRecord, Trace
 
 CHANGE_THRESHOLD = 0.001  # fraction of pixels that must move for "screen changed" (AM/PM toggle ≈ 0.15%, clock tick ≈ 0.01%)
 SETTLE_S = {"tap": 0.8, "tap_xy": 0.8, "long_press": 0.6, "type_text": 0.6, "press_key": 0.6,
@@ -66,14 +66,21 @@ class Agent:
         trace: Trace,
         config: AgentConfig = AgentConfig(),
         log: Callable[[str], None] = print,
+        on_step: Callable[[StepRecord], None] | None = None,
     ):
         self.device = device
         self.brain = brain
         self.trace = trace
         self.config = config
         self.log = log
+        self.on_step = on_step
         self._next_image: Image.Image | None = None
         self._server_errors = 0
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Ask the loop to stop before its next step (safe from another thread)."""
+        self._cancelled = True
 
     # ------------------------------------------------------------------ run
     def run(self, task: str) -> Outcome:
@@ -85,6 +92,8 @@ class Agent:
         last_action: Action | None = None
         try:
             for step in range(1, self.config.max_steps + 1):
+                if self._cancelled:
+                    return self._finish(None, "stopped by user", None, step - 1)
                 left = self.device.seconds_left()
                 if left is not None and left < self.config.min_seconds_left:
                     return self._finish(None, f"stopped: session expires in {int(left)}s", None, step - 1)
@@ -99,8 +108,7 @@ class Agent:
                 self.log(f"[{step}] {action.signature()}  — {action.thought}")
 
                 if action.name == "done":
-                    self.trace.record(step, obs.image, obs.marked, obs.app, len(obs.elements), action.thought,
-                                      action.name, action.args, "task finished", llm_s, 0.0)
+                    self._record(step, obs, action, "task finished", llm_s, 0.0)
                     return self._finish(bool(action.args.get("success")), action.args.get("summary", ""),
                                         action.args.get("result"), step)
 
@@ -118,8 +126,7 @@ class Agent:
                                  "Break the cycle: re-read the element list, try a different tool "
                                  "(e.g. swipe instead of scroll, launch_app by package), or report that the task is impossible.")
                 self.log(f"    -> {feedback}")
-                self.trace.record(step, obs.image, obs.marked, obs.app, len(obs.elements), action.thought,
-                                  action.name, action.args, feedback, llm_s, act_s)
+                self._record(step, obs, action, feedback, llm_s, act_s)
             return self._finish(None, f"stopped: reached step cap ({self.config.max_steps})", None, step)
         except CloudError as exc:
             return self._finish(False, "phone API error", None, step, error=str(exc))
@@ -250,6 +257,12 @@ class Agent:
             d.wait(secs)
             return f"Waited {secs:.1f}s"
         raise ValueError(f"unknown action {name}")
+
+    def _record(self, step: int, obs: Observation, action: Action, feedback: str, llm_s: float, act_s: float) -> None:
+        rec = self.trace.record(step, obs.image, obs.marked, obs.app, len(obs.elements), action.thought,
+                                action.name, action.args, feedback, llm_s, act_s)
+        if self.on_step:
+            self.on_step(rec)
 
     def _finish(self, success: bool | None, summary: str, result: str | None, steps: int, error: str | None = None) -> Outcome:
         self.trace.finish(success, summary, result, error)

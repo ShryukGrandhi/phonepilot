@@ -2,6 +2,7 @@
 
     phonepilot run "Open Settings and turn on dark theme"
     phonepilot chat                      # several tasks on one phone
+    phonepilot web                       # browser UI with live phone view
     phonepilot start | sessions | end SID | shot SID out.png | op SID tree | viewer SID
     phonepilot account | history
     phonepilot report RUN_DIR | video RUN_DIR
@@ -108,6 +109,18 @@ def cmd_chat(args) -> int:
                 trace = new_trace(task, lease.session.id, brain, Path(args.runs_dir), price, lease.ready_wait_s)
                 outcome = Agent(device, brain, trace, AgentConfig(max_steps=args.max_steps), log).run(task)
                 _print_outcome(outcome)
+    return 0
+
+
+def cmd_web(args) -> int:
+    from .brain import make_brain
+    from .web.server import serve
+
+    brain = make_brain(args.brain, args.model)
+    log(f"phonepilot {__version__} · brain {brain.name}/{brain.model}")
+    with PhoneHarnessClient() as client:
+        serve(client, brain, Path(args.runs_dir), args.host, args.port, args.session, args.max_steps,
+              open_browser=not args.no_open, log=log)
     return 0
 
 
@@ -265,6 +278,13 @@ def _parser() -> argparse.ArgumentParser:
     c = sub.add_parser("chat", help="interactive: many tasks on one phone")
     brain_opts(c); session_opts(c)
     c.set_defaults(func=cmd_chat)
+
+    w = sub.add_parser("web", help="browser UI: live phone view, chat box, step log")
+    brain_opts(w)
+    w.add_argument("--session", "-s", default=None, help="attach an existing ready session")
+    w.add_argument("--host", default="127.0.0.1"); w.add_argument("--port", type=int, default=8765)
+    w.add_argument("--no-open", action="store_true", help="do not open the browser automatically")
+    w.set_defaults(func=cmd_web)
 
     s = sub.add_parser("start", help="create a session, wait for ready, print its id")
     s.add_argument("--timeout", type=int, default=900)

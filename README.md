@@ -66,6 +66,24 @@ pytest                    # 62 offline tests against a fake of the cloud API
 
 ## Usage
 
+### Browser UI
+
+```bash
+phonepilot web            # opens http://127.0.0.1:8765
+```
+
+Left: the phone, live (the page polls the Cloud API's `frame.png` snapshot
+about once a second) with a toggle to see the exact marked screenshot the
+model saw on the last step. Right: a chat box and a streaming log of every
+step (reasoning, action, verified outcome, thumbnail). Buttons start / attach /
+end the phone; a Stop button cancels a running task after its current step.
+The server is stdlib `http.server` + Server-Sent Events, no extra
+dependencies; all phone control still goes through the Cloud API.
+
+![PhonePilot web UI](docs/web-ui.jpg)
+
+### Command line
+
 ```bash
 # one task on a fresh phone; the phone is ended when the run finishes
 phonepilot run "Open Settings and turn on the dark theme"
@@ -127,6 +145,7 @@ Flags for `run`/`chat`: `--brain {anthropic,gemini}`, `--model`, `--max-steps`
 | `agent.py` | the loop: observe → decide → act → verify; repeat-without-effect nudges; step and deadline budgets; always records the run. |
 | `sessions.py` | acquire/reuse/release a phone, ends what it created even on crash. |
 | `trace.py`, `video.py` | run folder, `report.html`, mp4 rendering. |
+| `web/` | local browser UI: `server.py` (state machine, SSE hub, frame proxy, run-file serving) and `index.html`. |
 | `cli.py` | `phonepilot` commands. |
 
 ## Design decisions

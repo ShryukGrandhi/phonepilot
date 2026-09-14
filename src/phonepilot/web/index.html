@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhonePilot</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#12151c; --panel-2:#181c25; --line:#232937; --text:#e8eaf0; --muted:#8a92a6;
+    --accent:#ffd479; --ok:#8be28b; --warn:#ffb86b; --bad:#ff7b7b; --info:#8ab4f8;
+    --mono:"JetBrains Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+    --sans:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);
+    background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+    background-size:32px 32px;}
+  header{display:flex;align-items:center;gap:18px;padding:10px 18px;border-bottom:1px solid var(--line);background:rgba(11,13,18,.9);backdrop-filter:blur(6px);position:sticky;top:0;z-index:5}
+  header h1{font-size:17px;margin:0;letter-spacing:.3px}
+  header h1 span{color:var(--accent)}
+  .chip{font:12px var(--mono);color:var(--muted);padding:3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--panel)}
+  .chip b{color:var(--text);font-weight:600}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+  .dot.ready{background:var(--ok);box-shadow:0 0 8px var(--ok)} .dot.running{background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 1s infinite alternate}
+  .dot.starting,.dot.ending{background:var(--warn)}
+  @keyframes pulse{from{opacity:.5}to{opacity:1}}
+  .spacer{flex:1}
+  main{display:grid;grid-template-columns:420px 1fr;gap:16px;padding:16px;height:calc(100% - 52px);min-height:0}
+  @media (max-width:900px){main{grid-template-columns:1fr;height:auto}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  .panel-h{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+  .panel-h .spacer{flex:1}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{background:transparent;border:0;color:var(--muted);padding:4px 10px;font:12px var(--sans);cursor:pointer}
+  .seg button.on{background:var(--panel-2);color:var(--text)}
+  .phone-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:16px;min-height:0}
+  .bezel{position:relative;aspect-ratio:9/16;height:100%;max-height:100%;max-width:100%;border-radius:26px;background:#000;padding:10px;box-shadow:0 20px 60px rgba(0,0,0,.6),inset 0 0 0 1px #2a3040}
+  .bezel img{width:100%;height:100%;object-fit:contain;border-radius:16px;background:#000;display:block}
+  .bezel .empty{position:absolute;inset:10px;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:20px;font-size:13px}
+  .controls{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line);flex-wrap:wrap;align-items:center}
+  button.btn{background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font:13px var(--sans);cursor:pointer;transition:transform .08s,border-color .15s}
+  button.btn:hover{border-color:#3a4356} button.btn:active{transform:translateY(1px)}
+  button.btn.primary{background:var(--accent);color:#1a1300;border-color:var(--accent);font-weight:600}
+  button.btn.danger{color:var(--bad);border-color:#4a2a2a}
+  button.btn:disabled{opacity:.45;cursor:not-allowed}
+  input.text{background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:8px 10px;font:13px var(--mono);width:140px}
+  .log{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px;scroll-behavior:smooth}
+  .ev-log{font:12px var(--mono);color:var(--muted);white-space:pre-wrap;padding:0 4px}
+  .ev-task{align-self:flex-end;max-width:80%;background:#2a2410;border:1px solid #4a3d16;color:var(--accent);border-radius:14px 14px 4px 14px;padding:10px 14px;font-weight:500}
+  .step{display:grid;grid-template-columns:64px 1fr;gap:12px;background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .step img{width:64px;border-radius:6px;cursor:zoom-in;border:1px solid var(--line)}
+  .step .n{font:11px var(--mono);color:var(--muted);margin-bottom:4px}
+  .step .n b{color:var(--text)} .step .n .app{color:var(--info);margin-left:6px}
+  .step .thought{margin:0 0 6px}
+  .step .act{display:inline-block;font:12px var(--mono);background:#0d1016;border:1px solid var(--line);color:var(--accent);padding:3px 8px;border-radius:6px;margin-bottom:6px}
+  .step .fb{font-size:12.5px;color:var(--ok)} .step .fb.nochange{color:var(--warn)}
+  .step .lat{font:11px var(--mono);color:var(--muted);margin-top:4px}
+  .outcome{border-radius:12px;padding:12px 14px;border:1px solid}
+  .outcome.ok{background:#10251a;border-color:#1f4d2f} .outcome.bad{background:#2a1414;border-color:#5a2a2a} .outcome.meh{background:#2a2410;border-color:#4a3d16}
+  .outcome a{color:var(--info)}
+  .composer{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line);align-items:flex-end}
+  textarea{flex:1;resize:none;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px 12px;font:14px var(--sans);min-height:44px;max-height:140px}
+  textarea:focus,input.text:focus{outline:none;border-color:#4a5670;box-shadow:0 0 0 3px rgba(138,180,248,.15)}
+  .hint{font-size:11px;color:var(--muted);padding:0 14px 10px}
+  #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:20;cursor:zoom-out}
+  #lightbox img{max-height:92vh;max-width:92vw;border-radius:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span>Phone</span>Pilot</h1>
+  <span class="chip"><span id="dot" class="dot"></span><b id="status">no phone</b></span>
+  <span class="chip">session <b id="sid">—</b></span>
+  <span class="chip">left <b id="left">—</b></span>
+  <span class="chip">brain <b id="brain">—</b></span>
+  <span class="spacer"></span>
+  <span class="chip">balance <b id="balance">—</b></span>
+</header>
+<main>
+  <section class="panel" id="phone-panel">
+    <div class="panel-h">Phone
+      <span class="spacer"></span>
+      <span class="seg"><button id="v-live" class="on" onclick="setView('live')">Live</button><button id="v-agent" onclick="setView('agent')">Agent's view</button></span>
+    </div>
+    <div class="phone-wrap">
+      <div class="bezel">
+        <img id="frame" alt="" hidden>
+        <div class="empty" id="frame-empty">No phone yet. Start one below (about 2 minutes to boot, billed per minute once ready).</div>
+      </div>
+    </div>
+    <div class="controls">
+      <button class="btn primary" id="b-start" onclick="startPhone()">Start phone</button>
+      <input class="text" id="timeout" value="900" title="session lifetime, seconds"> <span style="color:var(--muted);font-size:12px">s</span>
+      <span class="spacer"></span>
+      <input class="text" id="attach-id" placeholder="session id">
+      <button class="btn" id="b-attach" onclick="attachPhone()">Attach</button>
+      <button class="btn danger" id="b-end" onclick="endPhone()" disabled>End phone</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-h">Conversation &amp; log <span class="spacer"></span><span id="run-link"></span></div>
+    <div class="log" id="log"></div>
+    <div class="composer">
+      <textarea id="task" placeholder="Tell the phone what to do… e.g. “Set an alarm for 6:30 AM and tell me every alarm listed”" disabled></textarea>
+      <button class="btn primary" id="b-run" onclick="runTask()" disabled>Run</button>
+      <button class="btn danger" id="b-stop" onclick="stopTask()" hidden>Stop</button>
+    </div>
+    <div class="hint">Enter to run · Shift+Enter for a new line · every step is saved to <code>runs/</code> with the screenshot the model saw</div>
+  </section>
+</main>
+<div id="lightbox" onclick="this.style.display='none'"><img id="lightbox-img" alt=""></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let state = {status:'no_phone'};
+let view = 'live';
+let lastMarked = null;
+let frameTimer = null;
+
+// ------------------------------------------------------------- events
+function connect(){
+  const es = new EventSource('/api/events');
+  es.onmessage = e => {
+    const ev = JSON.parse(e.data);
+    if (ev.kind === 'hello'){ $('log').innerHTML=''; ev.history.forEach(render); applyState(ev.state); return; }
+    if (ev.kind === 'state'){ applyState(ev); return; }
+    render(ev);
+  };
+  es.onerror = () => { setTimeout(()=>{ es.close(); connect(); }, 2000); };
+}
+function applyState(s){
+  state = s;
+  $('status').textContent = {no_phone:'no phone', starting:'starting…', ready:'ready', running:'running', ending:'ending…'}[s.status] || s.status;
+  $('dot').className = 'dot ' + s.status;
+  $('sid').textContent = s.session_id || '—';
+  $('brain').textContent = s.brain || '—';
+  $('balance').textContent = s.balance_cents==null ? '—' : ('$'+(s.balance_cents/100).toFixed(2)+' · '+(s.price_cents_per_minute||0)+'¢/min');
+  const canType = s.status === 'ready';
+  $('task').disabled = !canType; $('b-run').disabled = !canType;
+  $('b-stop').hidden = s.status !== 'running';
+  $('b-start').disabled = s.status !== 'no_phone'; $('b-attach').disabled = s.status !== 'no_phone';
+  $('b-end').disabled = !(s.status === 'ready' || s.status === 'running');
+  $('run-link').innerHTML = s.run_dir ? `<a href="/runs/${s.run_dir}/report.html" target="_blank" style="color:var(--info);text-transform:none;letter-spacing:0">open report</a>` : '';
+  tickLeft();
+  scheduleFrames();
+}
+let leftBase = null, leftAt = 0;
+function tickLeft(){
+  if (state.seconds_left == null){ $('left').textContent='—'; return; }
+  leftBase = state.seconds_left; leftAt = Date.now();
+}
+setInterval(()=>{ if (leftBase==null) return; const l = Math.max(0, leftBase - (Date.now()-leftAt)/1000|0); $('left').textContent = Math.floor(l/60)+'m '+(l%60)+'s'; }, 1000);
+setInterval(()=>{ if (state.status!=='no_phone') fetch('/api/state').then(r=>r.json()).then(applyState).catch(()=>{}); }, 20000);
+
+// ------------------------------------------------------------- render
+function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
+function esc(s){ return String(s??'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function render(ev){
+  const log = $('log'); let node;
+  if (ev.kind === 'log') node = el(`<div class="ev-log">${esc(ev.text)}</div>`);
+  else if (ev.kind === 'task') node = el(`<div class="ev-task">${esc(ev.task)}</div>`);
+  else if (ev.kind === 'step'){
+    const args = Object.entries(ev.args||{}).map(([k,v])=>`${k}=${JSON.stringify(v)}`).join(', ');
+    const nochange = /did NOT change|rejected|refused|error/i.test(ev.feedback||'');
+    node = el(`<div class="step">
+      <img src="${ev.marked_url}" alt="step ${ev.step}" onclick="zoom('${ev.marked_url}')">
+      <div>
+        <div class="n">step <b>${ev.step}</b><span class="app">${esc(ev.app||'')}</span> · ${ev.elements} elements</div>
+        <p class="thought">${esc(ev.thought)||'<em style="color:var(--muted)">no reasoning text</em>'}</p>
+        <span class="act">${esc(ev.action)}(${esc(args)})</span>
+        <div class="fb ${nochange?'nochange':''}">${esc(ev.feedback)}</div>
+        <div class="lat">model ${ev.latency_llm_s}s · phone ${ev.latency_act_s}s</div>
+      </div></div>`);
+    lastMarked = ev.marked_url; if (view==='agent') showAgentView();
+  }
+  else if (ev.kind === 'outcome'){
+    const cls = ev.success ? 'ok' : (ev.success===false ? 'bad' : 'meh');
+    const label = ev.success ? '✅ Success' : (ev.success===false ? '❌ Failed' : '⚠️ Incomplete');
+    node = el(`<div class="outcome ${cls}"><b>${label}</b> after ${ev.steps} steps — ${esc(ev.summary)}
+      ${ev.result?`<div style="margin-top:6px"><b>Result:</b> ${esc(ev.result)}</div>`:''}
+      ${ev.error?`<div style="margin-top:6px;color:var(--bad)">${esc(ev.error)}</div>`:''}
+      <div style="margin-top:6px"><a href="${ev.report_url}" target="_blank">open full report</a></div></div>`);
+  }
+  else return;
+  log.appendChild(node);
+  log.scrollTop = log.scrollHeight;
+}
+function zoom(url){ $('lightbox-img').src = url; $('lightbox').style.display='flex'; }
+
+// -------------------------------------------------------------- phone
+function setView(v){
+  view = v; $('v-live').classList.toggle('on', v==='live'); $('v-agent').classList.toggle('on', v==='agent');
+  if (v==='agent') showAgentView(); else scheduleFrames(true);
+}
+function showAgentView(){
+  if (!lastMarked) return;
+  $('frame').src = lastMarked; $('frame').hidden=false; $('frame-empty').hidden=true;
+}
+function scheduleFrames(now){
+  clearTimeout(frameTimer);
+  const live = view==='live' && (state.status==='ready' || state.status==='running');
+  if (!live){ if (state.status==='no_phone'){ $('frame').hidden=true; $('frame-empty').hidden=false; } return; }
+  const load = () => {
+    const img = new Image();
+    img.onload = () => { $('frame').src = img.src; $('frame').hidden=false; $('frame-empty').hidden=true; frameTimer=setTimeout(load, 1200); };
+    img.onerror = () => { frameTimer=setTimeout(load, 2500); };
+    img.src = '/api/frame.png?t=' + Date.now();
+  };
+  now ? load() : (frameTimer = setTimeout(load, 300));
+}
+
+// ------------------------------------------------------------ actions
+async function post(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+  const j = await r.json();
+  if (!r.ok) render({kind:'log', text:'✗ '+(j.error||r.status)});
+  return j;
+}
+function startPhone(){ post('/api/session/start', {timeout_seconds: parseInt($('timeout').value)||900}); }
+function attachPhone(){ const id=$('attach-id').value.trim(); if (id) post('/api/session/attach', {session_id:id}); }
+function endPhone(){ if (confirm('End the phone? Its data is deleted and billing stops.')) post('/api/session/end'); }
+function runTask(){ const t=$('task').value.trim(); if(!t) return; $('task').value=''; post('/api/task', {task:t}); }
+function stopTask(){ post('/api/task/stop'); }
+$('task').addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); runTask(); } });
+connect();
+</script>
+</body>
+</html>
