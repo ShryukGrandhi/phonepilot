@@ -10,3 +10,4 @@ dist/
 htmlcov/
 logs/
 shot.png
+/data/
