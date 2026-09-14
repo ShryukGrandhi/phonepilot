@@ -77,6 +77,18 @@ def test_no_op_repeats_get_a_nudge(device, phone, tmp_path):
     assert "repeated this exact action" in feedbacks[2]
 
 
+def test_alternating_actions_get_a_cycle_nudge(device, phone, tmp_path):
+    from phonepilot.agent import is_cycling
+
+    assert is_cycling(["a", "b", "a", "b"]) and not is_cycling(["a", "a", "a", "a"]) and not is_cycling(["a", "b", "c", "b"])
+    actions = [Action("scroll", {"direction": "up"}), Action("navigate", {"action": "back"})] * 2
+    brain = ScriptedBrain(actions + [Action("done", {"success": False, "summary": "stuck"})])
+    run(device, brain, tmp_path)
+    feedbacks = [fb for _, fb in brain.seen if fb]
+    assert "alternating between the same two actions" not in feedbacks[2]
+    assert "alternating between the same two actions" in feedbacks[3]
+
+
 def test_step_cap_ends_run_incomplete(device, phone, tmp_path):
     brain = ScriptedBrain([Action("wait", {"seconds": 1})] * 5)
     outcome, _ = run(device, brain, tmp_path, max_steps=3)

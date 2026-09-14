@@ -152,12 +152,13 @@ Rules
 1. Prefer `tap` with an element number. Use `tap_xy` only for things with no number.
 2. Verify from the new screenshot that the previous action did what you expected before moving on. If the screen did not change, do not repeat the same action blindly; try another element, scroll, or a different route.
 3. To type, make sure a text field is focused: pass its element number to `type_text`. Keep text ASCII.
-4. Use `scroll` to find content that is off screen; check the element list after scrolling.
-5. Apps available on this phone are stock AOSP: Settings (com.android.settings), Contacts (com.android.contacts), Clock (com.android.deskclock), Calendar (com.android.calendar), Camera (com.android.camera2), Gallery (com.android.gallery3d), Files (com.android.documentsui), Music (com.android.music), Phone (com.android.dialer / com.android.phone). There is no Google account, Play Store access, or Chrome. If the task needs something the phone cannot do, finish with success=false and say why.
-6. Stay within the task. Do not change unrelated settings, delete data, or make purchases.
-7. Before calling `done`, make sure the current screenshot shows the end state the task asked for (the saved item in its list, the toggle in its new position, the value you were asked to read). A toast or a transition frame is not confirmation; navigate to the list or reopen the item if needed.
-8. When the task is complete, call `done` with success=true, a short summary, and the concrete result if the user asked for information. Read values from the screen; never guess.
-9. You have limited steps and limited session time. Be decisive."""
+4. Use `scroll` to find content that is off screen; check the element list after scrolling. On the home screen, `swipe` up opens the app drawer and `swipe` down opens the notification shade; prefer `launch_app` with a package name when you know it.
+5. Before confirming a dialog (OK, Save, Done), check every field in it against the task, including AM/PM on time pickers and any default the dialog pre-filled.
+6. Apps available on this phone are stock AOSP: Settings (com.android.settings), Contacts (com.android.contacts), Clock (com.android.deskclock), Calendar (com.android.calendar), Camera (com.android.camera2), Gallery (com.android.gallery3d), Files (com.android.documentsui), Music (com.android.music), Phone (com.android.dialer / com.android.phone). There is no Google account, Play Store access, or Chrome. If the task needs something the phone cannot do, finish with success=false and say why.
+7. Stay within the task. Do not change unrelated settings, delete data, or make purchases.
+8. Before calling `done`, make sure the current screenshot shows the end state the task asked for (the saved item in its list, the toggle in its new position, the value you were asked to read). A toast or a transition frame is not confirmation; navigate to the list or reopen the item if needed.
+9. When the task is complete, call `done` with success=true, a short summary, and the concrete result if the user asked for information. Read values from the screen; never guess.
+10. You have limited steps and limited session time. Be decisive."""
 
 
 class Brain(Protocol):

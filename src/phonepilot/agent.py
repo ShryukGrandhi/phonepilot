@@ -33,6 +33,7 @@ CHANGE_THRESHOLD = 0.001  # fraction of pixels that must move for "screen change
 SETTLE_S = {"tap": 0.8, "tap_xy": 0.8, "long_press": 0.6, "type_text": 0.6, "press_key": 0.6,
             "scroll": 1.0, "swipe": 1.0, "launch_app": 1.5, "navigate": 0.8, "wait": 0.0}
 REPEAT_LIMIT = 3
+CYCLE_WINDOW = 4  # A B A B  -> alternating without progress
 MIN_SECONDS_LEFT = 25
 TRANSITION_FRACTION = 0.25   # more than this much of the screen moved -> maybe still animating
 TRANSITION_SETTLE_S = 1.0
@@ -76,7 +77,7 @@ class Agent:
     def run(self, task: str) -> Outcome:
         self.brain.reset(task)
         feedback: str | None = None
-        recent: deque[str] = deque(maxlen=REPEAT_LIMIT)
+        recent: deque[str] = deque(maxlen=CYCLE_WINDOW)
         unchanged_streak = 0
         step = 0
         last_action: Action | None = None
@@ -107,9 +108,13 @@ class Agent:
 
                 recent.append(action.signature())
                 unchanged_streak = 0 if changed else unchanged_streak + 1
-                if len(recent) == REPEAT_LIMIT and len(set(recent)) == 1 and unchanged_streak >= REPEAT_LIMIT:
+                if len(recent) >= REPEAT_LIMIT and len(set(list(recent)[-REPEAT_LIMIT:])) == 1 and unchanged_streak >= REPEAT_LIMIT:
                     feedback += (" You have repeated this exact action several times with no effect. "
                                  "Stop repeating it: pick a different element, scroll, go back, or report failure.")
+                elif is_cycling(recent):
+                    feedback += (" You are alternating between the same two actions without making progress. "
+                                 "Break the cycle: re-read the element list, try a different tool "
+                                 "(e.g. swipe instead of scroll, launch_app by package), or report that the task is impossible.")
                 self.log(f"    -> {feedback}")
                 self.trace.record(step, obs.image, obs.marked, obs.app, len(obs.elements), action.thought,
                                   action.name, action.args, feedback, llm_s, act_s)
@@ -239,6 +244,14 @@ class Agent:
     def _finish(self, success: bool | None, summary: str, result: str | None, steps: int, error: str | None = None) -> Outcome:
         self.trace.finish(success, summary, result, error)
         return Outcome(success, summary, result, steps, self.trace.dir, error)
+
+
+def is_cycling(recent: deque[str] | list[str]) -> bool:
+    """True for an A B A B pattern of the last four actions (with A != B)."""
+    if len(recent) < CYCLE_WINDOW:
+        return False
+    a, b, c, d = list(recent)[-CYCLE_WINDOW:]
+    return a == c and b == d and a != b
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:

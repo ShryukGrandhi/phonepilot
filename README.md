@@ -30,7 +30,10 @@ mistake from the verify screenshot and fixing it.)
 Every run leaves a folder with each step's screenshot (with the element marks
 the model saw), the model's one-line reasoning, the action, and what the phone
 did in response — as `trace.jsonl`, a self-contained `report.html`, and
-optionally an mp4.
+optionally an mp4. While it runs you can watch the same phone in the Phone
+Harness dashboard's live viewer:
+
+![agent driving the phone, seen in the dashboard live viewer](docs/dashboard-live-viewer.jpg)
 
 ## Setup
 
