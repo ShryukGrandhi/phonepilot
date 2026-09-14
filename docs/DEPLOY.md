@@ -55,15 +55,52 @@ Phone Harness itself caps sessions per account (6 on the beta account I
 used), so pooled mode with more than a handful of simultaneous users needs
 either more accounts or a queue.
 
-## 3. What isolates users from each other
+## 3. One sandbox per phone session
+
+Since v0.2 the web tier does not run agents itself. When a user starts a
+phone, the service launches a **sandbox** for that session and proxies to it:
+
+```
+browser ──cookie──▶ web tier (auth, ownership, quotas, run files)
+                        │ bearer token, loopback only
+                        ▼
+              sandbox for user A            sandbox for user B
+              (container or process)        (container or process)
+              env: A's keys only            env: B's keys only
+              adb identity: its own         adb identity: its own
+              /runs → data/users/A/runs     /runs → data/users/B/runs
+                        │                              │
+                        ▼                              ▼
+              Phone Harness session A        Phone Harness session B
+```
+
+- `PHONEPILOT_SANDBOX=docker` (default when a Docker daemon is reachable):
+  `docker run` of the `phonepilot` image per session with `--read-only`,
+  `--cap-drop ALL`, `--security-opt no-new-privileges`, memory/CPU/pid
+  limits, a tmpfs for adb's key, and exactly one bind mount: the user's own
+  runs folder. The container gets the user's keys as env and a random
+  bearer token; the web tier is the only thing that knows the token, and the
+  port is published on 127.0.0.1 only.
+- `PHONEPILOT_SANDBOX=process`: same protocol, a `phonepilot sandbox`
+  subprocess per session with the same env discipline (the master key and
+  pool keys are stripped from its environment). Weaker boundary (shared
+  kernel and filesystem), zero extra dependencies. Use it on a Mac without
+  Docker, or in development.
+- The sandbox ends its phone when told to shut down, when it is stopped, or
+  when the phone's deadline passes; an idle sandbox with no phone is reaped
+  after 10 minutes.
+
+## 4. What isolates users from each other
 
 - **Identity on every request.** The session cookie (random 256-bit token,
   stored only as a SHA-256 hash, HttpOnly, SameSite=Strict, Secure over TLS)
   resolves to a user before any phone, event stream, frame, or run file is
   touched. There is no anonymous read path except `/login` and `/healthz`.
-- **One runtime per user.** `UserRuntime` holds that user's Phone Harness
-  client, model client, phone, agent, and event hub. Requests can only reach
-  the runtime for the cookie's user.
+- **One runtime and one sandbox per user.** `UserRuntime` launches and
+  proxies to that user's sandbox (container or process) which holds the
+  Phone Harness client, model client, phone connection and agent. Requests
+  can only reach the runtime for the cookie's user, and only that runtime
+  knows the sandbox's bearer token.
 - **Phone ownership is recorded, not inferred.** Every session id is written
   to the `phones` table with its owner at creation. Attach, frame, and task
   endpoints check that table; guessing another user's session id gets 403.
@@ -91,7 +128,7 @@ phone (that is inherent to a vision agent; choose the provider accordingly),
 and one compromised master key exposes all stored API keys (rotate it by
 re-encrypting; keep it out of the image and in a secret store).
 
-## 4. Backups and rotation
+## 5. Backups and rotation
 
 - Back up the `/data` volume (SQLite in WAL mode: copy `phonepilot.sqlite3`
   plus `-wal`/`-shm`, or use `sqlite3 .backup`).
@@ -101,7 +138,7 @@ re-encrypting; keep it out of the image and in a secret store).
 - Revoking a user: set `users.disabled = 1`; their cookies stop resolving
   immediately.
 
-## 5. Beyond one box
+## 6. Beyond one box
 
 When a single process is not enough: move the runtime out of the web tier
 into workers fed by a queue (Redis), publish events through Redis pub/sub,

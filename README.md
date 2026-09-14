@@ -92,9 +92,14 @@ phonepilot serve --port 8080 --data ./data       # or: docker compose up -d --bu
 Same page as `web`, plus accounts. Invite-only signup (first account is
 admin), each user pastes their own Phone Harness + model keys in Settings
 (encrypted at rest, never shown again), and gets their own phone, event
-stream, run history and quotas. Two users can never see each other's phone,
-frames, steps, or files; `docs/DEPLOY.md` spells out every isolation
-mechanism and the deployment (Docker + Caddy TLS).
+stream, run history and quotas. **Every phone session runs in its own
+sandbox** — a Docker container when a daemon is available, otherwise a
+separate process — holding only that user's keys, its own adb identity and
+its own runs folder; the web tier just proxies to it with a per-sandbox
+token. Two users can never see each other's phone, frames, steps, or files;
+`docs/DEPLOY.md` spells out every isolation mechanism, the sandbox model,
+and the deployment (Docker + Caddy TLS, or `deploy/mac/install.sh` for an
+always-on Mac with a Cloudflare tunnel).
 
 ### Command line
 

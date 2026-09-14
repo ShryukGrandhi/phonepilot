@@ -13,8 +13,8 @@ import pytest
 
 from phonepilot.brain.base import Action
 from phonepilot.cloud import PhoneHarnessClient
-from phonepilot.service import runtime as rt_mod
 from phonepilot.service.app import Service, make_server
+from phonepilot.service.sandbox import ThreadBackend
 from phonepilot.service.auth import Auth, AuthError
 from phonepilot.service.runtime import Limits, Pool
 from phonepilot.service.secrets import SecretBox, hint
@@ -85,16 +85,18 @@ def service(tmp_path, monkeypatch):
     phones = TwoPhones()
     monkeypatch.setattr("phonepilot.agent.time.sleep", lambda s: None)
 
-    class KeyedClient(PhoneHarnessClient):  # route by API key -> that user's phone
-        def __init__(self, api_key=None, **kw):
-            phone = {"pck_userA_key_000000000000": phones.a, "pck_userB_key_000000000000": phones.b}[api_key]
-            super().__init__(api_key="test-key", transport=httpx.MockTransport(phone.handle), sleep=lambda s: None)
+    def client_factory(env):  # the sandbox env carries exactly one user's phone key -> that user's fake phone
+        phone = {"pck_userA_key_000000000000": phones.a, "pck_userB_key_000000000000": phones.b}[env["PHONE_HARNESS_API_KEY"]]
+        return PhoneHarnessClient(api_key="test-key", transport=httpx.MockTransport(phone.handle), sleep=lambda s: None)
 
-    monkeypatch.setattr(rt_mod, "PhoneHarnessClient", KeyedClient)
-    monkeypatch.setattr(rt_mod, "_brain_with_key", lambda provider, key: ScriptedBrain(
-        [Action("tap", {"element": 1}, "tap"), Action("done", {"success": True, "summary": "ok", "result": key[-4:]})]))
+    def brain_factory(env):
+        key = env.get("GEMINI_API_KEY") or env.get("ANTHROPIC_API_KEY") or ""
+        return ScriptedBrain([Action("tap", {"element": 1}, "tap"), Action("done", {"success": True, "summary": "ok", "result": key[-4:]})])
+
+    backend = ThreadBackend(client_factory, brain_factory, log=lambda m: None)
     svc = Service(tmp_path / "data", master_key=MASTER, limits=Limits(max_phones_per_user=1, daily_phone_minutes=90,
-                                                                       max_steps=5, transport="http"), pool=Pool(None, None, None))
+                                                                       max_steps=5, transport="http"), pool=Pool(None, None, None),
+                  backend=backend)
     server = make_server(svc, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield svc, server.server_address[1], phones
@@ -157,7 +159,7 @@ def test_isolation_between_two_users(service):
     assert st == 200 and not j["is_admin"]
     assert b.js("POST", "/api/admin/invite", {})[0] == 403, "non-admin cannot mint invites"
 
-    # no keys yet -> cannot start
+    # no keys yet -> cannot start (checked before any sandbox is launched)
     st, j = a.js("POST", "/api/session/start", {})
     assert st == 409 and "Phone Harness API key" in j["error"]
     assert a.js("POST", "/api/keys", {"provider": "phone_harness", "value": "garbage"})[0] == 409
@@ -177,8 +179,9 @@ def test_isolation_between_two_users(service):
     rt_a, rt_b = svc.registry.get(svc.store.user_by_id(j and svc.store.user_by_email("a@x.io")[0].id)), None
     users = {u: svc.store.user_by_email(u)[0] for u in ("a@x.io", "b@x.io")}
     rt_a, rt_b = svc.registry.get(users["a@x.io"]), svc.registry.get(users["b@x.io"])
-    assert wait_for(lambda: rt_a.status == "ready" and rt_b.status == "ready")
-    assert rt_a.session.id == "phoneA" and rt_b.session.id == "phoneB"
+    assert wait_for(lambda: rt_a.status == "ready" and rt_b.status == "ready", timeout=10)
+    assert rt_a.session_id == "phoneA" and rt_b.session_id == "phoneB"
+    assert rt_a.sandbox.id != rt_b.sandbox.id and rt_a.sandbox.token != rt_b.sandbox.token, "one sandbox per user"
     assert a.js("POST", "/api/session/start", {})[0] == 409, "one phone per user"
 
     # frames come from each user's own phone
@@ -188,25 +191,25 @@ def test_isolation_between_two_users(service):
 
     # B cannot attach A's phone (even knowing the id); A cannot see B's session id anywhere
     b.js("POST", "/api/session/end", {})
-    assert wait_for(lambda: rt_b.status == "no_phone")
+    assert wait_for(lambda: rt_b.status == "no_phone", timeout=10)
     st, j = b.js("POST", "/api/session/attach", {"session_id": "phoneA"})
     assert st == 403
     assert "phoneB" not in json.dumps(a.js("GET", "/api/state")[1])
 
     # A runs a task; the result carries A's model key suffix, so it used A's brain
     assert a.js("POST", "/api/task", {"task": "tap it"})[0] == 200
-    assert wait_for(lambda: rt_a.status == "ready" and rt_a.agent is None)
-    outcome = next(e for e in rt_a.hub.history if e["kind"] == "outcome")
+    assert wait_for(lambda: any(e["kind"] == "outcome" for e in list(rt_a.hub.history)) and rt_a.status == "ready", timeout=15)
+    outcome = next(e for e in list(rt_a.hub.history) if e["kind"] == "outcome")
     assert outcome["success"] and outcome["result"] == "0000"
-    step = next(e for e in rt_a.hub.history if e["kind"] == "step")
+    step = next(e for e in list(rt_a.hub.history) if e["kind"] == "step")
     assert step["marked_url"].startswith("/runs/")
     assert ("input.tap", {"x": 100, "y": 100}) in phones.a.ops_log and not any(op == "input.tap" for op, _ in phones.b.ops_log)
 
     # B cannot read A's run files, A can; B's event stream never saw A's events
     assert a.call("GET", step["marked_url"])[0] == 200
     assert b.call("GET", step["marked_url"])[0] == 404
-    assert not any(e["kind"] in ("step", "outcome") for e in rt_b.hub.history)
-    assert [r["task"] for r in a.js("GET", "/api/runs")[1]["runs"]] == ["tap it"]
+    assert not any(e["kind"] in ("step", "outcome") for e in list(rt_b.hub.history))
+    assert wait_for(lambda: [r["task"] for r in a.js("GET", "/api/runs")[1]["runs"]] == ["tap it"], timeout=5)
     assert b.js("GET", "/api/runs")[1]["runs"] == []
 
     # path traversal

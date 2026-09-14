@@ -127,6 +127,22 @@ def cmd_web(args) -> int:
     return 0
 
 
+def cmd_sandbox(args) -> int:
+    """Token-protected single-phone agent server; the multi-user service starts one per phone session."""
+    from .brain import make_brain
+    from .web.server import serve_sandbox
+
+    token = os.environ.get("PHONEPILOT_SANDBOX_TOKEN")
+    if not token:
+        console.print("[red]PHONEPILOT_SANDBOX_TOKEN must be set[/red]")
+        return 1
+    brain = make_brain(args.brain, args.model)
+    log(f"phonepilot {__version__} sandbox · brain {brain.name}/{brain.model} · transport {args.transport}")
+    with PhoneHarnessClient() as client:
+        serve_sandbox(client, brain, Path(args.runs_dir), args.host, args.port, token, args.max_steps, args.transport, log)
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .service.app import serve
     from .service.secrets import ENV_MASTER_KEY, SecretBox
@@ -145,7 +161,8 @@ def cmd_serve(args) -> int:
         store.close()
         print(code)
         return 0
-    serve(Path(args.data), args.host, args.port, secure_cookies=args.secure_cookies, trust_proxy=args.trust_proxy, log=log)
+    serve(Path(args.data), args.host, args.port, secure_cookies=args.secure_cookies, trust_proxy=args.trust_proxy, log=log,
+          sandbox=args.sandbox)
     return 0
 
 
@@ -313,11 +330,18 @@ def _parser() -> argparse.ArgumentParser:
     w.add_argument("--no-open", action="store_true", help="do not open the browser automatically")
     w.set_defaults(func=cmd_web)
 
+    sb = sub.add_parser("sandbox", help="single-phone agent server with bearer-token auth (used inside session containers)")
+    brain_opts(sb)
+    sb.add_argument("--host", default="127.0.0.1"); sb.add_argument("--port", type=int, default=9000)
+    sb.set_defaults(func=cmd_sandbox)
+
     sv = sub.add_parser("serve", help="multi-user service: accounts, per-user phones, encrypted keys")
     sv.add_argument("--host", default="0.0.0.0"); sv.add_argument("--port", type=int, default=8080)
     sv.add_argument("--data", default="data", help="directory for the sqlite db and per-user runs")
     sv.add_argument("--secure-cookies", action="store_true", help="set when served over HTTPS (behind Caddy/nginx)")
     sv.add_argument("--trust-proxy", action="store_true", help="read client IP from X-Forwarded-For")
+    sv.add_argument("--sandbox", choices=["auto", "docker", "process"], default=None,
+                    help="how to isolate each phone session: docker container (default when available) or subprocess")
     sv.add_argument("--invite", action="store_true", help="print a new invite code and exit")
     sv.add_argument("--generate-master-key", action="store_true", help="print a fresh PHONEPILOT_MASTER_KEY and exit")
     sv.set_defaults(func=cmd_serve)

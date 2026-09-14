@@ -23,6 +23,7 @@ from typing import Any, Callable
 from ..cloud import CloudError
 from .auth import Auth, AuthError, clear_cookie_header, cookie_header, COOKIE_NAME
 from .runtime import ConfigError, KeyResolver, Limits, Pool, QuotaError, Registry, UserRuntime
+from .sandbox import SandboxError, pick_backend
 from .secrets import SecretBox
 from .store import Store, User
 
@@ -44,14 +45,15 @@ SECURITY_HEADERS = {
 class Service:
     def __init__(self, data_dir: Path, master_key: str | None = None, limits: Limits | None = None,
                  pool: Pool | None = None, secure_cookies: bool = False, trust_proxy: bool = False,
-                 log: Callable[[str], None] = print):
+                 log: Callable[[str], None] = print, backend: Any = None, sandbox: str | None = None):
         self.data_dir = data_dir
         self.store = Store(data_dir / "phonepilot.sqlite3")
         self.box = SecretBox(master_key)
         self.auth = Auth(self.store)
         self.limits = limits or Limits()
         self.keys = KeyResolver(self.store, self.box, pool or Pool())
-        self.registry = Registry(self.store, self.keys, self.limits, data_dir, log)
+        self.backend = backend or pick_backend(sandbox, log)
+        self.registry = Registry(self.store, self.keys, self.limits, data_dir, self.backend, log)
         self.secure_cookies = secure_cookies
         self.trust_proxy = trust_proxy
         self.log = log
@@ -249,7 +251,7 @@ class Handler(BaseHTTPRequestHandler):
                 rt.stop_task()
             else:
                 return self._json(404, {"error": f"no route POST {path}"})
-        except (ConfigError, QuotaError, RuntimeError, ValueError) as exc:
+        except (ConfigError, QuotaError, RuntimeError, ValueError, SandboxError) as exc:
             return self._json(409, {"error": str(exc)})
         except PermissionError as exc:
             return self._json(403, {"error": str(exc)})
@@ -268,8 +270,8 @@ def make_server(svc: Service, host: str, port: int) -> ThreadingHTTPServer:
 
 
 def serve(data_dir: Path, host: str = "0.0.0.0", port: int = 8080, secure_cookies: bool = False,
-          trust_proxy: bool = False, log: Callable[[str], None] = print) -> None:
-    svc = Service(data_dir, secure_cookies=secure_cookies, trust_proxy=trust_proxy, log=log)
+          trust_proxy: bool = False, log: Callable[[str], None] = print, sandbox: str | None = None) -> None:
+    svc = Service(data_dir, secure_cookies=secure_cookies, trust_proxy=trust_proxy, log=log, sandbox=sandbox)
     server = make_server(svc, host, port)
     log(f"PhonePilot service on http://{host}:{server.server_address[1]}/  (data: {data_dir.resolve()})")
     if svc.store.user_count() == 0:
@@ -282,14 +284,14 @@ def serve(data_dir: Path, host: str = "0.0.0.0", port: int = 8080, secure_cookie
         pass
     finally:
         server.server_close()
-        log("ending any phones this process started…")
+        log("stopping sandboxes and ending their phones…")
         svc.registry.shutdown()
         svc.store.close()
 
 
 def _sweep_loop(svc: Service) -> None:
     while True:
-        time.sleep(300)
+        time.sleep(60)
         try:
             svc.registry.sweep()
         except Exception:  # noqa: BLE001

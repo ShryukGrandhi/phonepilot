@@ -243,6 +243,27 @@ class AppState:
             latency_llm_s=rec.latency_llm_s, latency_act_s=rec.latency_act_s,
         )
 
+    # ------------------------------------------------------------ shutdown
+    server: Any = None  # set by serve()/serve_sandbox()
+
+    def shutdown(self) -> None:
+        """End the phone (if we own it) and stop the HTTP server. Used by the sandbox orchestrator."""
+        if self.agent:
+            self.agent.cancel()
+        try:
+            self._close_transport()
+        except Exception:  # noqa: BLE001
+            pass
+        if self.session and self.created_here:
+            try:
+                release(self.client, self.session.id, self._log)
+            except CloudError as exc:
+                self._log(f"end failed: {exc}")
+        self.session = None
+        self.status = "no_phone"
+        if self.server is not None:
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
     # --------------------------------------------------------------- frame
     def frame(self) -> bytes:
         if not self.session or self.status in ("no_phone", "starting", "ending"):
@@ -252,14 +273,24 @@ class AppState:
 
 class Handler(BaseHTTPRequestHandler):
     app: AppState  # set by serve()
+    token: str | None = None  # sandbox mode: every request must carry this bearer token
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:  # keep the terminal for agent logs
         return
 
+    def _authorized(self) -> bool:
+        if not self.token:
+            return True
+        return self.headers.get("Authorization") == f"Bearer {self.token}"
+
     # ----------------------------------------------------------------- GET
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path == "/healthz":
+            return self._json(200, {"ok": True, "status": self.app.status})
+        if not self._authorized():
+            return self._json(401, {"error": "sandbox token required"})
         if path == "/":
             return self._send(200, INDEX_HTML.read_bytes(), "text/html; charset=utf-8")
         if path == "/api/state":
@@ -319,8 +350,14 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------------- POST
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
+        if not self._authorized():
+            return self._json(401, {"error": "sandbox token required"})
         body = self._body()
         try:
+            if path == "/api/shutdown":
+                self._json(200, {"ok": True})
+                threading.Thread(target=self.app.shutdown, daemon=True).start()
+                return
             if path == "/api/session/start":
                 self.app.start_session(int(body.get("timeout_seconds") or 900))
             elif path == "/api/session/attach":
@@ -362,11 +399,28 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def make_server(app: AppState, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
-    handler = type("BoundHandler", (Handler,), {"app": app})
+def make_server(app: AppState, host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> ThreadingHTTPServer:
+    handler = type("BoundHandler", (Handler,), {"app": app, "token": token})
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
+    app.server = server
     return server
+
+
+def serve_sandbox(client: PhoneHarnessClient, brain: Brain, runs_dir: Path, host: str, port: int, token: str,
+                  max_steps: int = 25, transport: str = "http", log: Callable[[str], None] = print) -> None:
+    """One phone, one agent, one bearer token; no browser. This is what runs inside a sandbox container."""
+    app = AppState(client, brain, runs_dir, max_steps, log=log, transport=transport)
+    server = make_server(app, host, port, token=token)
+    log(f"sandbox agent server on http://{host}:{server.server_address[1]}/ (token-protected)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        if app.session and app.created_here:
+            release(client, app.session.id, log)
 
 
 def serve(

@@ -1,19 +1,25 @@
-"""Per-user runtime: each signed-in user gets their own clients, phone, agent, and event stream.
+"""Per-user runtime for the multi-user service: one sandbox per phone session.
 
-Isolation model
-- A `UserRuntime` is keyed by user id. It builds its Phone Harness client and model
-  brain from that user's own encrypted keys (or the operator's pooled keys, if
-  configured) and never touches another user's objects.
-- A phone (Phone Harness session) is recorded in the store with its owner at
-  creation. Attaching, streaming frames, running tasks, and reading run files all
-  check ownership against the store, not just against in-memory state.
-- Run folders live under data/users/<uid>/runs/, so file paths cannot cross users
-  even before the ownership check.
-- Quotas (phones per user, phone-minutes per day, steps per run) are enforced here.
+The web tier never holds a phone, an agent, or a decrypted key for longer than it
+takes to launch a sandbox. Each signed-in user gets a `UserRuntime` that:
+
+- resolves *that user's* keys (or the operator's pool) and hands them to a fresh
+  sandbox (process or container) as environment variables;
+- proxies phone/task/frame calls to that sandbox with a per-sandbox bearer token;
+- tails the sandbox's event stream in a thread and republishes it into the user's
+  own Hub (so browser tabs subscribe locally) while recording phones/runs in the
+  store for ownership checks and metering;
+- enforces quotas (phones per user, phone-minutes per day, steps, session length).
+
+Isolation therefore has three layers: the HTTP session cookie → user, the store
+rows that name an owner for every phone and run, and the OS boundary of the
+sandbox itself (container or separate process with its own env, adb identity and
+working directory).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -21,18 +27,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from ..agent import Agent, AgentConfig, new_trace
-from ..brain import make_brain
-from ..brain.base import Brain
-from ..cloud import CloudError, PhoneHarnessClient, Session
-from ..sessions import acquire, make_device, release
-from ..trace import StepRecord
 from ..web.server import Hub
+from .sandbox import Sandbox, SandboxError, SandboxSpec
 from .secrets import SecretBox, hint
 from .store import Store, User
 
 PROVIDERS = ("phone_harness", "gemini", "anthropic")
 KEY_PREFIX = {"phone_harness": "pck_", "gemini": "AIza", "anthropic": "sk-ant-"}
+IDLE_SANDBOX_S = 600  # a sandbox with no phone is stopped after this
 
 
 class ConfigError(Exception):
@@ -102,91 +104,58 @@ class KeyResolver:
                 return provider, key, "pool"
         raise ConfigError("Add a Gemini or Anthropic API key in Settings; the agent needs a model.")
 
+    def sandbox_env(self, uid: str) -> tuple[dict[str, str], str]:
+        """Environment for a sandbox: exactly this user's keys, nothing else. Returns (env, description)."""
+        phone_key, phone_src = self.phone_key(uid)
+        provider, model_key, model_src = self.model(uid)
+        env = {"PHONE_HARNESS_API_KEY": phone_key, "PHONEPILOT_BRAIN": provider,
+               ("ANTHROPIC_API_KEY" if provider == "anthropic" else "GEMINI_API_KEY"): model_key}
+        return env, f"phone key: {phone_src} · model: {provider} ({model_src} key)"
+
     def summary(self, uid: str) -> dict[str, Any]:
         hints = self.store.key_hints(uid)
-        return {
-            p: {"own": hints.get(p), "pool": bool(getattr(self.pool, p))} for p in PROVIDERS
-        }
+        return {p: {"own": hints.get(p), "pool": bool(getattr(self.pool, p))} for p in PROVIDERS}
 
 
 class UserRuntime:
-    """Mirror of the local AppState, scoped to one user and backed by the store."""
-
-    def __init__(self, user: User, store: Store, keys: KeyResolver, limits: Limits, data_dir: Path,
+    def __init__(self, user: User, store: Store, keys: KeyResolver, limits: Limits, data_dir: Path, backend: Any,
                  log: Callable[[str], None] | None = None):
         self.user = user
         self.store = store
         self.keys = keys
         self.limits = limits
+        self.backend = backend
         self.runs_dir = data_dir / "users" / user.id / "runs"
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.terminal_log = log
         self.hub = Hub()
         self.lock = threading.Lock()
-        self.client: PhoneHarnessClient | None = None
-        self.brain: Brain | None = None
-        self.session: Session | None = None
-        self.device: Any = None
-        self._close_transport: Callable[[], None] = lambda: None
-        self.status = "no_phone"
-        self.task: str | None = None
-        self.agent: Agent | None = None
-        self.run_dir: Path | None = None
+        self.sandbox: Sandbox | None = None
+        self.remote: dict[str, Any] = {}      # last state reported by the sandbox
+        self.status = "no_phone"              # no_phone | starting | ready | running | ending
+        self.session_id: str | None = None
         self.run_id: str | None = None
         self.last_used = time.time()
-
-    # ------------------------------------------------------------ clients
-    def _ensure_clients(self) -> None:
-        if self.client is None:
-            key, source = self.keys.phone_key(self.user.id)
-            self.client = PhoneHarnessClient(api_key=key)
-            self._log(f"phone harness key: {source}")
-        if self.brain is None:
-            provider, key, source = self.keys.model(self.user.id)
-            self.brain = _brain_with_key(provider, key)
-            self._log(f"model: {self.brain.name}/{self.brain.model} ({source} key)")
-
-    def reset_clients(self) -> None:
-        """Called after the user changes a key; takes effect for the next phone."""
-        if self.status == "no_phone":
-            if self.client:
-                self.client.close()
-            self.client = None
-            self.brain = None
+        self._watcher: threading.Thread | None = None
 
     # -------------------------------------------------------------- state
-    def _expire_if_needed(self) -> None:
-        """A phone that hit its Phone Harness deadline is gone; reflect that instead of showing 'ready'."""
-        left = self.device.seconds_left() if self.device else None
-        if self.status in ("ready", "running") and left is not None and left <= 0:
-            try:
-                self._close_transport()
-            except Exception:  # noqa: BLE001
-                pass
-            self._close_transport = lambda: None
-            self.store.end_phone(self.session.id)
-            self._log(f"session {self.session.id if self.session else '?'} reached its deadline and was closed by the service")
-            self.session, self.device, self.task, self.agent = None, None, None, None
-            self.status = "no_phone"
-
     def state(self) -> dict[str, Any]:
-        self._expire_if_needed()
         self.last_used = time.time()
-        s = self.session
-        used = self.store.phone_minutes_today(self.user.id)
+        r = self.remote
         return {
             "status": self.status,
-            "session_id": s.id if s else None,
-            "screen": list(s.screen) if s and s.screen else None,
-            "seconds_left": int(self.device.seconds_left() or 0) if self.device else None,
-            "task": self.task,
-            "brain": f"{self.brain.name}/{self.brain.model}" if self.brain else None,
+            "session_id": self.session_id,
+            "screen": r.get("screen"),
+            "seconds_left": r.get("seconds_left"),
+            "task": r.get("task"),
+            "brain": r.get("brain"),
             "transport": self.limits.transport,
-            "run_dir": self.run_dir.name if self.run_dir else None,
+            "run_dir": r.get("run_dir"),
+            "sandbox": {"backend": self.sandbox.backend, "id": self.sandbox.id} if self.sandbox else None,
             "user": {"email": self.user.email, "is_admin": self.user.is_admin},
             "keys": self.keys.summary(self.user.id),
             "quota": {
-                "phone_minutes_used_today": round(used, 1),
+                "phone_minutes_used_today": round(self.store.phone_minutes_today(self.user.id), 1),
                 "daily_phone_minutes": self.limits.daily_phone_minutes,
                 "max_steps": self.limits.max_steps,
                 "max_session_timeout_s": self.limits.max_session_timeout_s,
@@ -201,6 +170,84 @@ class UserRuntime:
     def _push_state(self) -> None:
         self.hub.publish("state", **self.state())
 
+    # ------------------------------------------------------------ sandbox
+    def _ensure_sandbox(self) -> Sandbox:
+        if self.sandbox is not None:
+            return self.sandbox
+        env, desc = self.keys.sandbox_env(self.user.id)
+        spec = SandboxSpec(user_id=self.user.id, runs_dir=self.runs_dir, env=env,
+                           transport=self.limits.transport, max_steps=self.limits.max_steps)
+        sb = self.backend.start(spec)
+        self.sandbox = sb
+        self._log(f"sandbox {sb.id} up ({sb.backend}); {desc}")
+        self.store.audit(self.user.id, "sandbox.start", f"{sb.backend}:{sb.id}")
+        self._watcher = threading.Thread(target=self._watch, args=(sb,), daemon=True)
+        self._watcher.start()
+        return sb
+
+    def _stop_sandbox(self) -> None:
+        sb, self.sandbox = self.sandbox, None
+        if sb is None:
+            return
+        try:
+            self.backend.stop(sb)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"sandbox stop failed: {exc}")
+        self.store.audit(self.user.id, "sandbox.stop", sb.id)
+        self.remote = {}
+        self.session_id = None
+
+    def _watch(self, sb: Sandbox) -> None:
+        """Tail the sandbox's SSE stream, mirror events into the user's hub, keep the store in sync."""
+        try:
+            resp = sb.open_stream("/api/events")
+            for raw in resp:
+                if not raw.startswith(b"data: "):
+                    continue
+                event = json.loads(raw[6:])
+                if event.get("kind") == "hello":
+                    self._absorb_state(event.get("state") or {})
+                    continue
+                if event.get("kind") == "state":
+                    self._absorb_state(event)
+                    self.hub.publish("state", **self.state())
+                    continue
+                if event.get("kind") == "task":
+                    self.run_id = None
+                if event.get("kind") == "step" and self.run_id is None and self.session_id:
+                    run_dir = event["marked_url"].split("/")[2]
+                    self.run_id = self.store.add_run(self.user.id, self.session_id, self.remote.get("task") or "", run_dir)
+                if event.get("kind") == "outcome" and self.run_id:
+                    self.store.finish_run(self.run_id, event.get("success"), event.get("summary") or "",
+                                          event.get("result"), int(event.get("steps") or 0))
+                    self.run_id = None
+                self.hub.publish(event.get("kind", "log"), **{k: v for k, v in event.items() if k not in ("kind", "t")})
+        except Exception as exc:  # noqa: BLE001
+            if self.sandbox is sb:
+                self._log(f"sandbox stream ended: {exc}")
+                self.status = "no_phone"
+                self._stop_sandbox()
+                self._push_state()
+
+    def _absorb_state(self, remote: dict[str, Any]) -> None:
+        self.remote = {k: remote.get(k) for k in ("status", "session_id", "screen", "seconds_left", "task", "brain", "run_dir")}
+        new_sid = remote.get("session_id")
+        if new_sid and new_sid != self.session_id:
+            self.session_id = new_sid
+            if self.store.phone_owner(new_sid) is None:
+                self.store.add_phone(new_sid, self.user.id, None, self.limits.transport)
+                self.store.audit(self.user.id, "phone.start", new_sid)
+        rs = remote.get("status")
+        if rs == "ready" and self.session_id and self.status in ("starting", "running"):
+            self.store.mark_phone_ready(self.session_id, time.time() + (remote.get("seconds_left") or 0))
+        if rs in ("ready", "running", "starting"):
+            self.status = rs
+        elif rs == "no_phone" and self.status != "ending":
+            if self.session_id:
+                self.store.end_phone(self.session_id)
+            self.session_id = None
+            self.status = "no_phone"
+
     # ------------------------------------------------------------ session
     def start_session(self, timeout_seconds: int | None) -> None:
         timeout = min(int(timeout_seconds or self.limits.default_session_timeout_s), self.limits.max_session_timeout_s)
@@ -211,10 +258,10 @@ class UserRuntime:
                 raise QuotaError("you already have a phone open; end it first")
             if self.store.phone_minutes_today(self.user.id) >= self.limits.daily_phone_minutes:
                 raise QuotaError("daily phone-minute quota reached")
-            self._ensure_clients()
+            self.keys.sandbox_env(self.user.id)  # raises ConfigError early, before any sandbox is launched
             self.status = "starting"
         self._push_state()
-        threading.Thread(target=self._start_bg, args=(None, timeout), daemon=True).start()
+        threading.Thread(target=self._start_bg, args=("/api/session/start", {"timeout_seconds": timeout}), daemon=True).start()
 
     def attach_session(self, sid: str) -> None:
         with self.lock:
@@ -222,58 +269,47 @@ class UserRuntime:
                 raise RuntimeError(f"cannot attach while status is {self.status}")
             if self.store.phone_owner(sid) != self.user.id:
                 raise PermissionError("that session is not yours")
-            self._ensure_clients()
+            self.keys.sandbox_env(self.user.id)
             self.status = "starting"
         self._push_state()
-        threading.Thread(target=self._start_bg, args=(sid, 0), daemon=True).start()
+        threading.Thread(target=self._start_bg, args=("/api/session/attach", {"session_id": sid}), daemon=True).start()
 
-    def _start_bg(self, sid: str | None, timeout: int) -> None:
-        assert self.client
+    def _start_bg(self, path: str, body: dict[str, Any]) -> None:
         try:
-            if sid is None:
-                s = self.client.create_session(timeout_seconds=timeout, idempotency_key=None)
-                self.store.add_phone(s.id, self.user.id, s.expires_at, self.limits.transport)
-                self.store.audit(self.user.id, "phone.start", s.id)
-                self._log(f"created session {s.id} (timeout {timeout}s); provisioning…")
-                lease = acquire(self.client, s.id, timeout, self._log)
-            else:
-                lease = acquire(self.client, sid, timeout, self._log)
-            self.session = lease.session
-            self.store.mark_phone_ready(lease.session.id, lease.session.expires_at)
-            self.device, self._close_transport = make_device(self.client, lease.session, self.limits.transport, self._log)
-            self.status = "ready"
+            sb = self._ensure_sandbox()
+            status, data, _ = sb.request("POST", path, body)
+            if status != 200:
+                raise SandboxError(json.loads(data or b"{}").get("error", f"sandbox answered {status}"))
         except Exception as exc:  # noqa: BLE001
             self._log(f"phone failed to start: {exc}")
             self.status = "no_phone"
-        self._push_state()
+            self._push_state()
 
     def end_session(self) -> None:
         with self.lock:
             if self.status in ("no_phone", "ending"):
+                if self.sandbox and self.status == "no_phone":
+                    threading.Thread(target=self._stop_sandbox, daemon=True).start()
                 return
-            if self.agent:
-                self.agent.cancel()
             self.status = "ending"
         self._push_state()
         threading.Thread(target=self._end_bg, daemon=True).start()
 
     def _end_bg(self) -> None:
-        try:
-            self._close_transport()
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"transport close failed: {exc}")
-        self._close_transport = lambda: None
-        if self.session and self.client:
+        sid = self.session_id
+        if self.sandbox:
             try:
-                release(self.client, self.session.id, self._log)
-            except CloudError as exc:
+                self.sandbox.request("POST", "/api/session/end", {})
+                for _ in range(100):  # wait for the sandbox to report no_phone (release() done)
+                    time.sleep(0.2)
+                    if self.remote.get("status") == "no_phone":
+                        break
+            except SandboxError as exc:
                 self._log(f"end failed: {exc}")
-            self.store.end_phone(self.session.id)
-            self.store.audit(self.user.id, "phone.end", self.session.id)
-        self.session = None
-        self.device = None
-        self.task = None
-        self.agent = None
+        if sid:
+            self.store.end_phone(sid)
+            self.store.audit(self.user.id, "phone.end", sid)
+        self._stop_sandbox()
         self.status = "no_phone"
         self._push_state()
 
@@ -287,57 +323,30 @@ class UserRuntime:
         with self.lock:
             if self.status == "running":
                 raise RuntimeError("a task is already running")
-            if self.status != "ready" or not self.device or not self.brain or not self.session:
+            if self.status != "ready" or not self.sandbox:
                 raise RuntimeError("phone is not ready")
+            status, data, _ = self.sandbox.request("POST", "/api/task", {"task": task})
+            if status != 200:
+                raise RuntimeError(json.loads(data or b"{}").get("error", f"sandbox answered {status}"))
             self.status = "running"
-            self.task = task
-        self.hub.publish("task", task=task)
-        self._push_state()
-        threading.Thread(target=self._run_bg, args=(task,), daemon=True).start()
-
-    def _run_bg(self, task: str) -> None:
-        assert self.device and self.session and self.brain
-        trace = new_trace(task, self.session.id, self.brain, self.runs_dir)
-        self.run_dir = trace.dir
-        self.run_id = self.store.add_run(self.user.id, self.session.id, task, trace.dir.name)
+            self.remote["task"] = task
         self.store.audit(self.user.id, "task.start", task[:120])
-        self.agent = Agent(self.device, self.brain, trace, AgentConfig(max_steps=self.limits.max_steps),
-                           log=self._log, on_step=self._on_step)
-        outcome = self.agent.run(task)
-        self.store.finish_run(self.run_id, outcome.success, outcome.summary, outcome.result, outcome.steps)
-        self.hub.publish("outcome", success=outcome.success, summary=outcome.summary, result=outcome.result,
-                         steps=outcome.steps, error=outcome.error, report_url=f"/runs/{trace.dir.name}/report.html")
-        self.agent = None
-        self.task = None
-        if self.status == "running":
-            self.status = "ready"
         self._push_state()
 
     def stop_task(self) -> None:
-        if self.agent:
-            self.agent.cancel()
-            self._log("stop requested; finishing the current step…")
-
-    def _on_step(self, rec: StepRecord) -> None:
-        assert self.run_dir
-        base = f"/runs/{self.run_dir.name}/"
-        self.hub.publish("step", step=rec.step, app=rec.app, elements=rec.elements, thought=rec.thought,
-                         action=rec.action, args=rec.args, feedback=rec.feedback, marked_url=base + rec.marked,
-                         shot_url=base + rec.screenshot, latency_llm_s=rec.latency_llm_s, latency_act_s=rec.latency_act_s)
+        if self.sandbox:
+            self.sandbox.request("POST", "/api/task/stop", {})
 
     # -------------------------------------------------------------- frame
     def frame(self) -> bytes:
-        if not self.session or not self.client or self.status in ("no_phone", "starting", "ending"):
+        if not self.sandbox or self.status in ("no_phone", "starting", "ending"):
             raise LookupError("no ready phone")
-        if self.store.phone_owner(self.session.id) != self.user.id:
+        if self.session_id and self.store.phone_owner(self.session_id) != self.user.id:
             raise PermissionError("not your phone")
-        if hasattr(self.device, "transport") and getattr(self.device, "transport") == "adb":
-            import io
-
-            buf = io.BytesIO()
-            self.device.screenshot().save(buf, format="PNG")
-            return buf.getvalue()
-        return self.client.snapshot(self.session.id)
+        status, data, ctype = self.sandbox.request("GET", "/api/frame.png", timeout=30)
+        if status != 200 or not ctype.startswith("image/"):
+            raise LookupError("no frame available")
+        return data
 
     def run_file(self, run_dir_name: str, rel: str) -> Path | None:
         if not self.store.run_dir_owned(self.user.id, run_dir_name):
@@ -348,28 +357,23 @@ class UserRuntime:
             return None
         return target
 
+    def reset_clients(self) -> None:
+        """After a key change: a sandbox without a phone is stopped so the next phone uses the new keys."""
+        if self.status == "no_phone" and self.sandbox:
+            self._stop_sandbox()
 
-def _brain_with_key(provider: str, key: str) -> Brain:
-    """Build a brain with an explicit key (never via process-wide env, which other users share)."""
-    if provider == "anthropic":
-        from ..brain.anthropic import AnthropicBrain
-
-        return AnthropicBrain(api_key=key)
-    if provider == "gemini":
-        from ..brain.gemini import GeminiBrain
-
-        return GeminiBrain(api_key=key)
-    return make_brain(provider)
+    # ------------------------------------------------------------ cleanup
+    def idle_cleanup(self) -> None:
+        if self.sandbox and self.status == "no_phone" and time.time() - self.last_used > IDLE_SANDBOX_S:
+            self._stop_sandbox()
 
 
 class Registry:
-    """uid -> UserRuntime, created lazily; idle runtimes without a phone are dropped."""
+    """uid -> UserRuntime, created lazily."""
 
-    IDLE_S = 3600
-
-    def __init__(self, store: Store, keys: KeyResolver, limits: Limits, data_dir: Path,
+    def __init__(self, store: Store, keys: KeyResolver, limits: Limits, data_dir: Path, backend: Any,
                  log: Callable[[str], None] | None = None):
-        self.store, self.keys, self.limits, self.data_dir, self.log = store, keys, limits, data_dir, log
+        self.store, self.keys, self.limits, self.data_dir, self.backend, self.log = store, keys, limits, data_dir, backend, log
         self._by_uid: dict[str, UserRuntime] = {}
         self._lock = threading.Lock()
 
@@ -377,26 +381,25 @@ class Registry:
         with self._lock:
             rt = self._by_uid.get(user.id)
             if rt is None:
-                rt = UserRuntime(user, self.store, self.keys, self.limits, self.data_dir, self.log)
+                rt = UserRuntime(user, self.store, self.keys, self.limits, self.data_dir, self.backend, self.log)
                 self._by_uid[user.id] = rt
             rt.user = user
             return rt
 
     def sweep(self) -> None:
-        now = time.time()
         with self._lock:
-            for uid, rt in list(self._by_uid.items()):
-                if rt.status == "no_phone" and now - rt.last_used > self.IDLE_S:
-                    del self._by_uid[uid]
+            runtimes = list(self._by_uid.values())
+        for rt in runtimes:
+            rt.idle_cleanup()
 
     def shutdown(self) -> None:
         with self._lock:
             runtimes = list(self._by_uid.values())
         for rt in runtimes:
-            if rt.session and rt.client:
-                try:
-                    rt._close_transport()
-                    release(rt.client, rt.session.id, rt._log)
-                    rt.store.end_phone(rt.session.id)
-                except Exception:  # noqa: BLE001
-                    pass
+            try:
+                if rt.session_id:
+                    rt._end_bg()
+                else:
+                    rt._stop_sandbox()
+            except Exception:  # noqa: BLE001
+                pass
