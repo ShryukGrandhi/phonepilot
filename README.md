@@ -4,17 +4,28 @@ A general phone agent on **Phone Harness Cloud**: give it a sentence, it drives
 a real cloud Android phone until the job is done and shows its work.
 
 ```
-$ phonepilot run "Add a contact named Ada Lovelace with phone 555-0199 and confirm it shows in the list"
-created session 5d7008187bb9 (timeout 1200s) provisioning…
-session 5d7008187bb9 ready after 139s: screen (720, 1280), 17 ops
-[1] launch_app(package='com.android.contacts')  — Opening Contacts to add the new entry.
-    -> Launched com.android.contacts. Screen changed.
-[2] tap(element=7)  — Tapping the "Create new contact" button.
-    -> Tapped [7] 'Create new contact' at (582,1150). Screen changed.
+$ phonepilot run "Open the Clock app and set an alarm for 6:30 AM. Then tell me what alarms are listed."
+created session 5d7008187bb9 (timeout 1200s); provisioning…
+session 5d7008187bb9 ready after 137s: screen (720, 1280), 17 ops
+[1] launch_app(package='com.android.deskclock')  — The task requires me to open the Clock app.
+    -> Launched com.android.deskclock. Screen changed (97% of pixels).
+[2] tap(element=2)  — 'ALARM' is a clickable option to navigate to the alarm section.
+    -> Tapped [2] 'Alarm' at (80,120). Screen changed (8% of pixels).
+[3] tap(element=20)  — The floating action button with a plus sign is used to add a new alarm.
+[4] tap(element=17)  — Setting the hour to 6.
+[5] tap(element=18)  — Setting the minutes to 30.
+[6] tap(element=20)  — AM is selected. Now I need to confirm by tapping OK.
+[7] tap(element=22)  — The alarm was set for 6:30 PM instead of AM. I need to edit the alarm to change it to AM.
 …
-SUCCESS after 9 steps: Created contact Ada Lovelace (555-0199); it is listed under A.
-trace: runs/20260914-131500-add-a-contact-named-ada/report.html
+[12] done(success=True, result='The listed alarms are: 6:30 AM, 8:30 AM, and 9:00 AM.')
+
+SUCCESS after 12 steps: Successfully opened the Clock app and set an alarm for 6:30 AM.
+Result: The listed alarms are: 6:30 AM, 8:30 AM, and 9:00 AM.
+trace: runs\20260914-124223-open-the-clock-app-and-set-an-alarm-for-\report.html
 ```
+
+(Real output from session `5d7008187bb9`; step 7 is the agent noticing its own
+mistake from the verify screenshot and fixing it.)
 
 Every run leaves a folder with each step's screenshot (with the element marks
 the model saw), the model's one-line reasoning, the action, and what the phone
@@ -47,7 +58,7 @@ Check the wiring without spending phone minutes:
 
 ```bash
 phonepilot account        # balance, price per minute, session slots
-pytest                    # 46 offline tests against a fake of the cloud API
+pytest                    # 59 offline tests against a fake of the cloud API
 ```
 
 ## Usage
@@ -165,7 +176,7 @@ session creates.
 
 ## Testing
 
-`pytest` runs 46 offline tests in under 3 s: the cloud client against an
+`pytest` runs 59 offline tests in under 4 s: the cloud client against an
 in-memory fake of the service (`tests/conftest.py`), the device wrapper, element
 selection and marking, the agent loop with a scripted brain (happy path, bad
 element, no-op nudges, step cap, deadline, phone refusals, brain crash), the
@@ -175,8 +186,12 @@ plumbing and image pruning). Live runs against the real API are what the
 
 ## Limits and known gaps
 
-- The phone is an AOSP Cuttlefish emulator: no Google services, no Play Store,
-  no Chrome, no SIM. Tasks needing those end with `success=false` and a reason.
+- The phone is a stock AOSP image (Android 15, `redroid15_arm64`): no Google
+  services, no Play Store, no Chrome, no SIM. Tasks needing those end with
+  `success=false` and a reason.
+- Every live run so far used Gemini 2.5 Flash. The Anthropic adapter is
+  unit-tested against a stubbed SDK but has not driven a phone yet (no API key
+  on the build machine).
 - Typing is ASCII-only (platform limit; see NOTES.md).
 - Apps with custom-drawn UI (games, some web views) expose few accessibility
   nodes; the agent falls back to `tap_xy` from the screenshot, which is less

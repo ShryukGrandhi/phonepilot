@@ -67,9 +67,13 @@ directly; numbers are from my own sessions, not marketing.
 - **`/me` vs `/account`.** The docs' "Get your account" page maps to `/me`; my
   first guess (`/account`) 404s with `no route GET /account`. Fine, but an
   alias would cost nothing.
-- **Viewer URL is Cuttlefish** (`live.phone-harness.com/cuttlefis…`), so the
-  "phone" is an AOSP emulator. Worth stating plainly in the docs: no Play
-  Services, no SIM, `Contacts` has no accounts.
+- **What is the phone, exactly?** The viewer URL path starts with
+  `cuttlefis…`, but Settings → About phone reports device name
+  `redroid15_arm64` (Android 15), i.e. redroid (Android-in-a-container), not
+  Cuttlefish. Either way it is an AOSP image: no Play Services, no SIM,
+  `Contacts` has no accounts. Worth stating plainly in the docs, and the
+  `device` field in the session (`"shlut Android (default)"`) could carry the
+  Android version.
 
 ## What fails / platform issues
 
@@ -95,7 +99,7 @@ Session `5d7008187bb9` (1200 s, three tasks back to back, Gemini 2.5 Flash):
 |---|---|---|---|
 | Add contact "Ada Lovelace" 555-0199 and confirm in list | 8 | 74 s | ✅ |
 | Set a 6:30 AM alarm, list all alarms | 12 | 108 s | ✅ (self-corrected PM→AM) |
-| Read Android version + device name from Settings | see run folder | | |
+| Read Android version + device name from Settings | 12 | 121 s | ✅ "Android 15, redroid15_arm64" (scrolling System missed About phone; agent fell back to Settings search) |
 
 - **Per-step cost is dominated by the phone, not the model.** Flash answered in
   1.7–3 s; the phone side (action + settle + `screen.capture` + `tree` +
