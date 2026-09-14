@@ -149,7 +149,7 @@ class DockerBackend:
         port = _free_port()
         spec.runs_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
-            "docker", "run", "-d", "--name", name, "--label", "phonepilot.sandbox=1", "--label", f"phonepilot.owner={os.getpid()}",
+            "docker", "run", "-d", "--name", name, "--no-healthcheck", "--label", "phonepilot.sandbox=1", "--label", f"phonepilot.owner={os.getpid()}",
             "--read-only", "--tmpfs", "/tmp:rw,size=256m", "--tmpfs", "/home/phonepilot/.android:rw,size=1m",
             "--memory", "768m", "--cpus", "1", "--pids-limit", "256",
             "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
