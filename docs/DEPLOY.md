@@ -20,6 +20,13 @@ Caddy terminates TLS with an automatic Let's Encrypt certificate for
 built on the development machine, which had no Docker daemon running; the
 non-Docker path below is what was exercised.)
 
+On an always-on Mac (Mac Studio / mini), `deploy/mac/install.sh` installs
+uv, adb and cloudflared with Homebrew, registers two launchd agents
+(`phonepilot serve` on 127.0.0.1:8080 and a Cloudflare quick tunnel that
+publishes it at a random `https://…trycloudflare.com` URL), and prints the
+URL. Written against the launchd/Homebrew conventions; not yet executed on a
+Mac from this project.
+
 Without Docker:
 
 ```bash
