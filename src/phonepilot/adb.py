@@ -90,7 +90,13 @@ class AdbTunnel:
         return self._open_ssh(data)
 
     def _register(self) -> dict[str, Any]:
-        """Offer adb's own RSA key first (what the live service wants); fall back to SSH ed25519."""
+        """Handle every shape of POST /sessions/{sid}/adb seen so far.
+
+        1. body {public_key: <adbkey.pub>}  -> {transport: "adb", host, port}            (docs, 2026-09-14 pm)
+        2. no body                          -> {transport: "adb", host, port, code}      (live, 2026-09-14 eve)
+           the code is sent over adb itself: `adb shell unlock <code>` after connecting
+        3. body {public_key: <ssh-ed25519>} -> SSH tunnel details                          (original docs)
+        """
         adb_pub = adb_public_key()
         if adb_pub:
             self.log("registering adb's RSA public key (~/.android/adbkey.pub) with POST /sessions/{sid}/adb …")
@@ -99,7 +105,11 @@ class AdbTunnel:
             except CloudError as exc:
                 if exc.status != 400:
                     raise
-                self.log(f"service declined the adb key ({exc.payload.get('error')}); trying an ssh-ed25519 key")
+                message = str(exc.payload.get("error", ""))
+                if "no body" in message or "reset" in message:
+                    self.log("service uses the unlock-code flow; enabling ADB without a key")
+                    return self.client.enable_adb_codeflow(self.session.id)
+                self.log(f"service declined the adb key ({message}); trying an ssh-ed25519 key")
         key = self._dir / "id_ed25519"
         _run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "phonepilot", "-f", str(key)])
         public_key = (self._dir / "id_ed25519.pub").read_text(encoding="utf-8").strip()
@@ -109,11 +119,22 @@ class AdbTunnel:
         self.serial = f"{data['host']}:{int(data['port'])}"
         self.info = TunnelInfo(host=data["host"], port=int(data["port"]), username="", host_key="",
                                forward_host="", forward_port=0, expires_at=float(data.get("expires_at") or 0))
-        self.log(f"direct ADB endpoint {self.serial} (transport=adb, authenticated by adb key)")
+        self.log(f"direct ADB endpoint {self.serial} (transport=adb)")
         out = _run(["adb", "connect", self.serial], timeout=30).stdout
         self.log(f"adb connect: {out.strip()}")
         self.log(f"adb device state: {self._wait_for_device()}")
+        code = data.get("code")
+        if code:
+            self._unlock(code)
         return self
+
+    def _unlock(self, code: str) -> None:
+        """Unlock-code flow: the phone answers every shell command with 'locked' until the code is presented."""
+        out = _run(["adb", "-s", self.serial, "shell", "unlock", code], timeout=30, check=False).stdout.strip()
+        self.log(f"adb unlock: {out or 'ok'}")
+        probe = _run(["adb", "-s", self.serial, "shell", "getprop", "ro.product.model"], timeout=30, check=False).stdout.strip()
+        if probe.startswith("locked"):
+            raise AdbError(f"phone still locked after presenting the code: {probe}")
 
     def _open_ssh(self, data: dict[str, Any]) -> "AdbTunnel":
         key = self._dir / "id_ed25519"

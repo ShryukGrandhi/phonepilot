@@ -15,7 +15,9 @@ Server-Sent Events, so the project stays dependency-light.
 from __future__ import annotations
 
 import json
+import os
 import queue
+import sys
 import threading
 import time
 import webbrowser
@@ -169,8 +171,16 @@ class AppState:
                 self._push_state()
                 return
             self.session = lease.session
-            self.device, self._close_transport = make_device(self.client, lease.session, self.transport, self._log)
             self.created_here = lease.created_here
+            try:
+                self.device, self._close_transport = make_device(self.client, lease.session, self.transport, self._log)
+            except Exception:
+                # transport setup failed (e.g. adb registration); never leave a billed phone behind
+                if lease.created_here:
+                    self._log(f"transport setup failed; releasing session {lease.session.id}")
+                    release(self.client, lease.session.id, self._log)
+                self.session = None
+                raise
             self.status = "ready"
             self._account_t = 0.0
         except Exception as exc:  # noqa: BLE001 — surface to the UI
@@ -430,11 +440,14 @@ def make_server(app: AppState, host: str = "127.0.0.1", port: int = 8765, token:
 
 
 def serve_sandbox(client: PhoneHarnessClient, brain: Brain, runs_dir: Path, host: str, port: int, token: str,
-                  max_steps: int = 25, transport: str = "http", log: Callable[[str], None] = print) -> None:
+                  max_steps: int = 25, transport: str = "http", log: Callable[[str], None] = print,
+                  parent_pid: int | None = None) -> None:
     """One phone, one agent, one bearer token; no browser. This is what runs inside a sandbox container."""
     app = AppState(client, brain, runs_dir, max_steps, log=log, transport=transport)
     server = make_server(app, host, port, token=token)
     log(f"sandbox agent server on http://{host}:{server.server_address[1]}/ (token-protected)")
+    if parent_pid:
+        threading.Thread(target=_watch_parent, args=(parent_pid, app, log), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -443,6 +456,35 @@ def serve_sandbox(client: PhoneHarnessClient, brain: Brain, runs_dir: Path, host
         server.server_close()
         if app.session and app.created_here:
             release(client, app.session.id, log)
+
+
+def _watch_parent(pid: int, app: "AppState", log: Callable[[str], None]) -> None:
+    """If the web tier that launched us dies, end our phone and exit instead of running (and billing) on."""
+    while process_alive(pid):
+        time.sleep(3.0)
+    log(f"parent process {pid} is gone; ending the phone and shutting down")
+    app.shutdown()
+
+
+def process_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        import ctypes
+
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) != 0  # WAIT_OBJECT_0 == exited
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 def serve(

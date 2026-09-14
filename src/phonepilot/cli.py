@@ -139,7 +139,8 @@ def cmd_sandbox(args) -> int:
     brain = make_brain(args.brain, args.model)
     log(f"phonepilot {__version__} sandbox · brain {brain.name}/{brain.model} · transport {args.transport}")
     with PhoneHarnessClient() as client:
-        serve_sandbox(client, brain, Path(args.runs_dir), args.host, args.port, token, args.max_steps, args.transport, log)
+        serve_sandbox(client, brain, Path(args.runs_dir), args.host, args.port, token, args.max_steps, args.transport, log,
+                      parent_pid=args.parent_pid)
     return 0
 
 
@@ -333,6 +334,7 @@ def _parser() -> argparse.ArgumentParser:
     sb = sub.add_parser("sandbox", help="single-phone agent server with bearer-token auth (used inside session containers)")
     brain_opts(sb)
     sb.add_argument("--host", default="127.0.0.1"); sb.add_argument("--port", type=int, default=9000)
+    sb.add_argument("--parent-pid", type=int, default=None, help="exit (ending the phone) when this process dies")
     sb.set_defaults(func=cmd_sandbox)
 
     sv = sub.add_parser("serve", help="multi-user service: accounts, per-user phones, encrypted keys")

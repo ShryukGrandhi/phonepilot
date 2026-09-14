@@ -271,6 +271,13 @@ class PhoneHarnessClient:
     def enable_adb(self, sid: str, public_key: str) -> dict[str, Any]:
         return self._json("POST", f"/sessions/{sid}/adb", json={"public_key": public_key.strip()})
 
+    def enable_adb_codeflow(self, sid: str) -> dict[str, Any]:
+        """Newer ADB flow: no key registration; the response carries an unlock `code` for `adb shell unlock`."""
+        return self._json("POST", f"/sessions/{sid}/adb")
+
+    def reset_adb_code(self, sid: str) -> dict[str, Any]:
+        return self._json("POST", f"/sessions/{sid}/adb/reset")
+
     def get_adb(self, sid: str) -> dict[str, Any]:
         return self._json("GET", f"/sessions/{sid}/adb")
 

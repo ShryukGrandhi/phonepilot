@@ -90,6 +90,12 @@ directly; numbers are from my own sessions, not marketing.
   "Start phone" can fail for reasons unrelated to the user; I now surface the
   message verbatim. Request: a `Retry-After` header on that 409, and either a
   faster cleanup path or `available_session_slots` that accounts for it.
+- **The ADB endpoint changed shape three times in one day** (which is great
+  responsiveness, and also exactly what breaks clients):
+  1. morning docs: ssh-ed25519 key → SSH tunnel;
+  2. ~15:00: `POST /adb` wants `adbkey.pub`, answers `{transport:"adb", host, port}`, plain `adb connect` works (the guide was updated to this by ~16:30);
+  3. ~17:00: `POST /adb` with a body → `400 ADB enable takes no body; use /adb/reset to rotate the code`; no body → `{…, "code": "ph_…"}`; after `adb connect`, every shell command answers `locked: run adb shell unlock <code> first` until you run exactly that; wrong code keeps it locked; `POST /adb/reset` rotates the code. The guide still describes shape 2.
+  My client now tries the key registration, falls back to the code flow on that 400, and runs `adb shell unlock` after connecting. Requests: version the endpoint (or the `transport` value), and put the unlock step in the guide and OpenAPI (`AdbConnection` has no `code`).
 - **The ADB docs and the ADB endpoint disagree.** The guide and the OpenAPI
   schema say: register an `ssh-ed25519` public key, receive an SSH gateway
   (`username: shlut-adb`, pinned `host_key`, `forward_host`/`forward_port`),

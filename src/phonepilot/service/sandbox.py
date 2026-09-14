@@ -94,7 +94,8 @@ class ProcessBackend:
         for k in ("PHONEPILOT_MASTER_KEY", "PHONEPILOT_POOL_PHONE_KEY", "PHONEPILOT_POOL_GEMINI_KEY", "PHONEPILOT_POOL_ANTHROPIC_KEY"):
             env.pop(k, None)  # a sandbox never sees the master key or the pool
         cmd = [sys.executable, "-m", "phonepilot.cli", "sandbox", "--host", "127.0.0.1", "--port", str(port),
-               "--runs-dir", str(spec.runs_dir), "--transport", spec.transport, "--max-steps", str(spec.max_steps)]
+               "--runs-dir", str(spec.runs_dir), "--transport", spec.transport, "--max-steps", str(spec.max_steps),
+               "--parent-pid", str(os.getpid())]
         spec.runs_dir.mkdir(parents=True, exist_ok=True)
         logfile = open(spec.runs_dir.parent / f"sandbox-{port}.log", "ab")  # noqa: SIM115 — lives as long as the process
         proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=logfile, stderr=subprocess.STDOUT)
@@ -125,6 +126,16 @@ class DockerBackend:
         if shutil.which("docker") is None:
             raise SandboxError("docker CLI not found")
         self.image, self.network, self.log = image, network, log
+        self.reap_stale()
+
+    def reap_stale(self) -> None:
+        """Containers left by a web tier that died: ask them to shut down (ends their phones), then remove."""
+        r = subprocess.run(["docker", "ps", "-q", "--filter", "label=phonepilot.sandbox=1"], capture_output=True, text=True, timeout=30)
+        stale = [c for c in r.stdout.split() if c]
+        for cid in stale:
+            self.log(f"reaping stale sandbox container {cid[:12]}")
+            subprocess.run(["docker", "stop", "-t", "120", cid], capture_output=True, timeout=180)
+            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=60)
 
     @staticmethod
     def available() -> bool:
@@ -138,7 +149,7 @@ class DockerBackend:
         port = _free_port()
         spec.runs_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
-            "docker", "run", "-d", "--name", name,
+            "docker", "run", "-d", "--name", name, "--label", "phonepilot.sandbox=1", "--label", f"phonepilot.owner={os.getpid()}",
             "--read-only", "--tmpfs", "/tmp:rw,size=256m", "--tmpfs", "/home/phonepilot/.android:rw,size=1m",
             "--memory", "768m", "--cpus", "1", "--pids-limit", "256",
             "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
