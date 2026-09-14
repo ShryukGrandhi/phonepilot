@@ -1,0 +1,17 @@
+{
+  "task": "Add a contact named Grace Hopper with phone number 555-0142, then open the contacts list and confirm she is there.",
+  "session_id": "2d136f1b0934",
+  "brain": "gemini",
+  "model": "gemini-2.5-flash",
+  "started": 1789415402.7525349,
+  "ended": 1789415492.5407586,
+  "success": true,
+  "summary": "Added Grace Hopper with phone number 555-0142 to contacts and confirmed her presence in the contacts list.",
+  "result": null,
+  "steps": 9,
+  "error": null,
+  "price_cents_per_minute": 35,
+  "ready_wait_s": 0.06675790000008419,
+  "duration_s": 89.8,
+  "estimated_cost_cents": 70
+}

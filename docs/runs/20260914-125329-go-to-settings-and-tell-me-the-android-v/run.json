@@ -1,0 +1,17 @@
+{
+  "task": "Go to Settings and tell me the Android version and the device name of this phone.",
+  "session_id": "2d136f1b0934",
+  "brain": "gemini",
+  "model": "gemini-2.5-flash",
+  "started": 1789415609.3264315,
+  "ended": 1789415705.2328808,
+  "success": true,
+  "summary": "Found the Android version and device name.",
+  "result": "Android version: 15, Device name: redroid15_arm64",
+  "steps": 8,
+  "error": null,
+  "price_cents_per_minute": 35,
+  "ready_wait_s": 0.052067200012970716,
+  "duration_s": 95.9,
+  "estimated_cost_cents": 70
+}

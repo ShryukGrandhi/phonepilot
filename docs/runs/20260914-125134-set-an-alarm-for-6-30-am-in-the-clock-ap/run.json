@@ -1,0 +1,17 @@
+{
+  "task": "Set an alarm for 6:30 AM in the Clock app, then tell me every alarm that is listed.",
+  "session_id": "2d136f1b0934",
+  "brain": "gemini",
+  "model": "gemini-2.5-flash",
+  "started": 1789415494.0268989,
+  "ended": 1789415607.9428074,
+  "success": true,
+  "summary": "Set an alarm for 6:30 AM.",
+  "result": "Alarms listed: 6:30 AM, 8:30 AM, 9:00 AM.",
+  "steps": 11,
+  "error": null,
+  "price_cents_per_minute": 35,
+  "ready_wait_s": 0.03722959995502606,
+  "duration_s": 113.9,
+  "estimated_cost_cents": 70
+}

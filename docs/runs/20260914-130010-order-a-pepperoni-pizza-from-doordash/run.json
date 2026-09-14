@@ -1,0 +1,17 @@
+{
+  "task": "Order a pepperoni pizza from DoorDash.",
+  "session_id": "2d136f1b0934",
+  "brain": "gemini",
+  "model": "gemini-2.5-flash",
+  "started": 1789416010.043098,
+  "ended": 1789416153.2772176,
+  "success": false,
+  "summary": "The 'Deals' pop-up is persistent and cannot be closed, preventing me from entering the delivery address and proceeding with the order.",
+  "result": null,
+  "steps": 12,
+  "error": null,
+  "price_cents_per_minute": 35,
+  "ready_wait_s": 0.040072100004181266,
+  "duration_s": 143.2,
+  "estimated_cost_cents": 105
+}
