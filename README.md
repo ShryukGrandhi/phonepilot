@@ -90,6 +90,10 @@ phonepilot history                     # finished sessions and cost
 # after a run
 phonepilot report runs/<run>           # open report.html
 phonepilot video  runs/<run>           # render demo.mp4 (ffmpeg)
+
+# the demo: one phone, four tasks, one stitched video
+bash scripts/demo.sh                   # or: bash scripts/demo.sh my_tasks.txt
+python scripts/make_demo_video.py runs/demo-<stamp> --out docs/demo.mp4
 ```
 
 Flags for `run`/`chat`: `--brain {anthropic,gemini}`, `--model`, `--max-steps`

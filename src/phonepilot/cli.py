@@ -112,11 +112,15 @@ def cmd_chat(args) -> int:
 
 
 def cmd_start(args) -> int:
+    """Provision a phone. Progress goes to stderr; stdout carries only the session id,
+    so `SID=$(phonepilot start)` works in scripts."""
     from .sessions import acquire
 
+    err = Console(highlight=False, soft_wrap=True, stderr=True)
     with PhoneHarnessClient() as client:
-        lease = acquire(client, None, args.timeout, log)
-    print(lease.session.id)
+        lease = acquire(client, None, args.timeout, lambda m: err.print(m, markup=False))
+    sys.stdout.write(lease.session.id + "\n")
+    sys.stdout.flush()
     return 0
 
 

@@ -54,6 +54,16 @@ def test_sessions_and_history_commands(monkeypatch, capsys, phone):
     assert phone.state == "closing"
 
 
+def test_start_prints_only_the_session_id_on_stdout(monkeypatch, capsys, phone):
+    monkeypatch.setenv("PHONE_HARNESS_API_KEY", "test-key")
+    phone.polls_until_ready = 1
+    monkeypatch.setattr(cli, "PhoneHarnessClient", lambda **kw: PhoneHarnessClient(api_key="test-key", transport=httpx.MockTransport(phone.handle), sleep=lambda s: None))
+    assert cli.main(["start", "--timeout", "300"]) == 0
+    out, err = capsys.readouterr()
+    assert out == "fake123\n", "stdout must be exactly the id so SID=$(phonepilot start) works"
+    assert "provisioning" in err
+
+
 def test_op_command_prints_result(monkeypatch, capsys, phone):
     monkeypatch.setenv("PHONE_HARNESS_API_KEY", "test-key")
     phone.state = "ready"

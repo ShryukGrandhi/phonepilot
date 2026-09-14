@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# End-to-end demo: one phone, several natural-language tasks, one video.
-#   bash scripts/demo.sh            # runs the default task list
-#   bash scripts/demo.sh tasks.txt  # one task per line
+# End-to-end demo: one phone, several natural-language tasks, one video per task.
+#   bash scripts/demo.sh                 # fresh phone, default task list, phone ended at exit
+#   bash scripts/demo.sh tasks.txt       # one task per line
+#   SID=abc123 bash scripts/demo.sh      # reuse a ready session (not ended at exit)
+#   PP=.venv/Scripts/phonepilot bash scripts/demo.sh   # pick the CLI binary
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PP=${PP:-phonepilot}
@@ -21,9 +23,13 @@ else
   )
 fi
 
-echo "== starting phone (this is the slow part, ~2 min)"
-SID=$($PP start --timeout 1800)
-trap '$PP end "$SID" || true' EXIT
+if [ -z "${SID:-}" ]; then
+  echo "== starting phone (this is the slow part, ~2 min)"
+  SID=$($PP start --timeout 1800 | tail -n 1 | tr -d '\r\n ')
+  trap '$PP end "$SID" || true' EXIT
+else
+  echo "== reusing session $SID"
+fi
 echo "== session $SID"
 
 for t in "${TASKS[@]}"; do
@@ -34,6 +40,7 @@ done
 
 echo; echo "== rendering videos"
 for d in "$RUNS"/*/; do
+  [ -f "$d/run.json" ] || continue
   $PP video "$d" --seconds 2.5 || true
 done
 echo "== done: $RUNS"
