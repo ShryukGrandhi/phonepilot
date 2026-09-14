@@ -90,7 +90,21 @@ class AppState:
         self._account_t = 0.0
 
     # --------------------------------------------------------------- state
+    def _expire_if_needed(self) -> None:
+        """A phone that hit its Phone Harness deadline is gone; reflect that instead of showing 'ready'."""
+        left = self.device.seconds_left() if self.device else None
+        if self.status in ("ready", "running") and left is not None and left <= 0:
+            try:
+                self._close_transport()
+            except Exception:  # noqa: BLE001
+                pass
+            self._close_transport = lambda: None
+            self._log(f"session {self.session.id if self.session else '?'} reached its deadline and was closed by the service")
+            self.session, self.device, self.task, self.agent = None, None, None, None
+            self.status = "no_phone"
+
     def state(self) -> dict[str, Any]:
+        self._expire_if_needed()
         acct = self._account_cached()
         s = self.session
         return {

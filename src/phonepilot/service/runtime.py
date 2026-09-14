@@ -155,7 +155,22 @@ class UserRuntime:
             self.brain = None
 
     # -------------------------------------------------------------- state
+    def _expire_if_needed(self) -> None:
+        """A phone that hit its Phone Harness deadline is gone; reflect that instead of showing 'ready'."""
+        left = self.device.seconds_left() if self.device else None
+        if self.status in ("ready", "running") and left is not None and left <= 0:
+            try:
+                self._close_transport()
+            except Exception:  # noqa: BLE001
+                pass
+            self._close_transport = lambda: None
+            self.store.end_phone(self.session.id)
+            self._log(f"session {self.session.id if self.session else '?'} reached its deadline and was closed by the service")
+            self.session, self.device, self.task, self.agent = None, None, None, None
+            self.status = "no_phone"
+
     def state(self) -> dict[str, Any]:
+        self._expire_if_needed()
         self.last_used = time.time()
         s = self.session
         used = self.store.phone_minutes_today(self.user.id)
