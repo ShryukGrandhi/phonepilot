@@ -82,6 +82,20 @@ dependencies; all phone control still goes through the Cloud API.
 
 ![PhonePilot web UI](docs/web-ui.jpg)
 
+### Multi-user service
+
+```bash
+export PHONEPILOT_MASTER_KEY=$(phonepilot serve --generate-master-key)
+phonepilot serve --port 8080 --data ./data       # or: docker compose up -d --build
+```
+
+Same page as `web`, plus accounts. Invite-only signup (first account is
+admin), each user pastes their own Phone Harness + model keys in Settings
+(encrypted at rest, never shown again), and gets their own phone, event
+stream, run history and quotas. Two users can never see each other's phone,
+frames, steps, or files; `docs/DEPLOY.md` spells out every isolation
+mechanism and the deployment (Docker + Caddy TLS).
+
 ### Command line
 
 ```bash
@@ -171,7 +185,9 @@ both shapes (see NOTES.md).
 | `agent.py` | the loop: observe → decide → act → verify; repeat-without-effect nudges; step and deadline budgets; always records the run. |
 | `sessions.py` | acquire/reuse/release a phone, ends what it created even on crash. |
 | `trace.py`, `video.py` | run folder, `report.html`, mp4 rendering. |
+| `adb.py` | the ADB transport: registers a key via `POST /sessions/{id}/adb`, connects stock adb, and mirrors `Device` over `input`/`screencap`/`uiautomator`, plus `shell`/`grant`/`logcat`. |
 | `web/` | local browser UI: `server.py` (state machine, SSE hub, frame proxy, run-file serving) and `index.html`. |
+| `service/` | multi-user service: `store.py` (SQLite), `auth.py` (scrypt, cookie sessions, invites), `secrets.py` (Fernet), `runtime.py` (per-user runtime + quotas), `app.py` (auth-scoped routes, CSRF, security headers). |
 | `cli.py` | `phonepilot` commands. |
 
 ## Design decisions

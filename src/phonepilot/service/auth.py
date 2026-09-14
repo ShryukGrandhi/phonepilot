@@ -37,7 +37,8 @@ class Login:
 
 
 def _hash_password(password: str, salt: bytes) -> bytes:
-    return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**15, r=8, p=1, dklen=32)
+    # 128 * n * r bytes of memory = 32 MiB; hashlib's default maxmem is exactly that, so raise it
+    return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**15, r=8, p=1, dklen=32, maxmem=128 * 1024 * 1024)
 
 
 def _token_hash(token: str) -> str:

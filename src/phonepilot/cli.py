@@ -2,7 +2,8 @@
 
     phonepilot run "Open Settings and turn on dark theme"
     phonepilot chat                      # several tasks on one phone
-    phonepilot web                       # browser UI with live phone view
+    phonepilot web                       # browser UI with live phone view (single user, local)
+    phonepilot serve                     # multi-user service with accounts
     phonepilot start | sessions | end SID | shot SID out.png | op SID tree | viewer SID
     phonepilot account | history
     phonepilot report RUN_DIR | video RUN_DIR
@@ -123,6 +124,28 @@ def cmd_web(args) -> int:
     with PhoneHarnessClient() as client:
         serve(client, brain, Path(args.runs_dir), args.host, args.port, args.session, args.max_steps,
               open_browser=not args.no_open, log=log, transport=args.transport)
+    return 0
+
+
+def cmd_serve(args) -> int:
+    from .service.app import serve
+    from .service.secrets import ENV_MASTER_KEY, SecretBox
+
+    if args.generate_master_key:
+        print(SecretBox.generate_master_key())
+        return 0
+    if not os.environ.get(ENV_MASTER_KEY):
+        console.print(f"[red]{ENV_MASTER_KEY} is not set.[/red] Generate one with: phonepilot serve --generate-master-key")
+        return 1
+    if args.invite:
+        from .service.store import Store
+
+        store = Store(Path(args.data) / "phonepilot.sqlite3")
+        code = store.create_invite(None)
+        store.close()
+        print(code)
+        return 0
+    serve(Path(args.data), args.host, args.port, secure_cookies=args.secure_cookies, trust_proxy=args.trust_proxy, log=log)
     return 0
 
 
@@ -289,6 +312,15 @@ def _parser() -> argparse.ArgumentParser:
     w.add_argument("--host", default="127.0.0.1"); w.add_argument("--port", type=int, default=8765)
     w.add_argument("--no-open", action="store_true", help="do not open the browser automatically")
     w.set_defaults(func=cmd_web)
+
+    sv = sub.add_parser("serve", help="multi-user service: accounts, per-user phones, encrypted keys")
+    sv.add_argument("--host", default="0.0.0.0"); sv.add_argument("--port", type=int, default=8080)
+    sv.add_argument("--data", default="data", help="directory for the sqlite db and per-user runs")
+    sv.add_argument("--secure-cookies", action="store_true", help="set when served over HTTPS (behind Caddy/nginx)")
+    sv.add_argument("--trust-proxy", action="store_true", help="read client IP from X-Forwarded-For")
+    sv.add_argument("--invite", action="store_true", help="print a new invite code and exit")
+    sv.add_argument("--generate-master-key", action="store_true", help="print a fresh PHONEPILOT_MASTER_KEY and exit")
+    sv.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("start", help="create a session, wait for ready, print its id")
     s.add_argument("--timeout", type=int, default=900)

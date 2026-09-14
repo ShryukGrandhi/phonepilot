@@ -1,0 +1,34 @@
+services:
+  phonepilot:
+    build: .
+    restart: unless-stopped
+    environment:
+      PHONEPILOT_MASTER_KEY: ${PHONEPILOT_MASTER_KEY:?run `phonepilot serve --generate-master-key` and put it in .env}
+      # Optional shared keys. Leave unset to require every user to bring their own.
+      PHONEPILOT_POOL_PHONE_KEY: ${PHONEPILOT_POOL_PHONE_KEY:-}
+      PHONEPILOT_POOL_GEMINI_KEY: ${PHONEPILOT_POOL_GEMINI_KEY:-}
+      PHONEPILOT_POOL_ANTHROPIC_KEY: ${PHONEPILOT_POOL_ANTHROPIC_KEY:-}
+      PHONEPILOT_MAX_PHONES_PER_USER: ${PHONEPILOT_MAX_PHONES_PER_USER:-1}
+      PHONEPILOT_DAILY_PHONE_MINUTES: ${PHONEPILOT_DAILY_PHONE_MINUTES:-90}
+      PHONEPILOT_MAX_STEPS: ${PHONEPILOT_MAX_STEPS:-25}
+      PHONEPILOT_TRANSPORT: ${PHONEPILOT_TRANSPORT:-http}
+    volumes:
+      - phonepilot-data:/data
+    expose: ["8080"]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN (e.g. phones.example.com) in .env}
+    command: caddy reverse-proxy --from ${DOMAIN} --to phonepilot:8080
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [phonepilot]
+
+volumes:
+  phonepilot-data:
+  caddy-data:
+  caddy-config:

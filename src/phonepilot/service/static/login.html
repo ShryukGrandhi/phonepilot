@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhonePilot · sign in</title>
+<style>
+  :root{--bg:#0b0d12;--panel:#12151c;--line:#232937;--text:#e8eaf0;--muted:#8a92a6;--accent:#ffd479;--bad:#ff7b7b;
+    --sans:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;--mono:"JetBrains Mono",Consolas,ui-monospace,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);
+    background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:32px 32px}
+  .card{width:min(420px,92vw);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  h1{margin:0 0 4px;font-size:22px}h1 span{color:var(--accent)}
+  p.sub{margin:0 0 22px;color:var(--muted)}
+  label{display:block;font-size:12px;color:var(--muted);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.6px}
+  input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px 12px;font:14px var(--sans)}
+  input:focus{outline:none;border-color:#4a5670;box-shadow:0 0 0 3px rgba(138,180,248,.15)}
+  button{margin-top:18px;width:100%;background:var(--accent);color:#1a1300;border:0;border-radius:9px;padding:11px;font:600 14px var(--sans);cursor:pointer}
+  .row{display:flex;gap:14px;margin-top:14px;font-size:13px;color:var(--muted)}
+  .row a{color:#8ab4f8;cursor:pointer}
+  .err{color:var(--bad);margin-top:12px;min-height:18px;font-size:13px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<form class="card" id="f" onsubmit="return submitForm(event)">
+  <h1><span>Phone</span>Pilot</h1>
+  <p class="sub" id="sub">Sign in to your phone agent.</p>
+  <label>Email</label><input id="email" type="email" autocomplete="username" required>
+  <label>Password</label><input id="password" type="password" autocomplete="current-password" minlength="10" required>
+  <div id="invite-wrap" class="hidden"><label>Invite code</label><input id="invite" autocomplete="off" placeholder="leave empty if you are the first account"></div>
+  <button id="go">Sign in</button>
+  <div class="err" id="err"></div>
+  <div class="row"><span id="toggle-text">New here?</span> <a id="toggle" onclick="toggle()">Create an account</a></div>
+</form>
+<script>
+let mode = 'login';
+function toggle(){
+  mode = mode === 'login' ? 'signup' : 'login';
+  document.getElementById('invite-wrap').classList.toggle('hidden', mode==='login');
+  document.getElementById('go').textContent = mode==='login' ? 'Sign in' : 'Create account';
+  document.getElementById('sub').textContent = mode==='login' ? 'Sign in to your phone agent.' : 'Invite-only. Passwords: 10+ characters.';
+  document.getElementById('toggle-text').textContent = mode==='login' ? 'New here?' : 'Have an account?';
+  document.getElementById('toggle').textContent = mode==='login' ? 'Create an account' : 'Sign in instead';
+  document.getElementById('err').textContent = '';
+}
+async function submitForm(e){
+  e.preventDefault();
+  const body = {email: document.getElementById('email').value, password: document.getElementById('password').value};
+  if (mode==='signup') body.invite = document.getElementById('invite').value.trim() || null;
+  const r = await fetch('/api/auth/' + mode, {method:'POST', headers:{'Content-Type':'application/json','X-PhonePilot':'1'}, body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok){ document.getElementById('err').textContent = j.error || ('error ' + r.status); return false; }
+  location.href = '/';
+  return false;
+}
+</script>
+</body>
+</html>
