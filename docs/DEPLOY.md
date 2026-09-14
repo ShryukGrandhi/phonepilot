@@ -95,7 +95,13 @@ browser ──cookie──▶ web tier (auth, ownership, quotas, run files)
   Docker, or in development.
 - The sandbox ends its phone when told to shut down, when it is stopped, or
   when the phone's deadline passes; an idle sandbox with no phone is reaped
-  after 10 minutes.
+  after 10 minutes. A sandbox process also watches the web tier's PID and
+  ends its phone if the web tier dies; on start the Docker backend reaps any
+  labelled containers left behind by a previous web tier.
+- Verified live on 2026-09-14 (sessions `7047f583685c` process, `80e8d3f111dd`
+  Docker): each sandbox provisioned its own phone, connected adb inside its
+  own boundary (unlock-code flow), ran a task, served frames to the web tier,
+  and released the phone on end; the container was removed afterwards.
 
 ## 4. What isolates users from each other
 
