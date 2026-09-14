@@ -158,6 +158,7 @@ function applyState(s){
   $('sid').textContent = s.session_id || '—';
   $('brain').textContent = s.brain || '—';
   if (s.user){ $('who').textContent = s.user.email; $('admin').hidden = !s.user.is_admin; }
+  if (s.last_error && s.status==='no_phone'){ const last=$('log').lastElementChild; if(!last || !last.textContent.includes(s.last_error)) render({kind:'log', text:'✗ '+s.last_error}); }
   if (s.quota){ $('quota').textContent = s.quota.phone_minutes_used_today+' / '+s.quota.daily_phone_minutes+' phone-min'; }
   if (s.keys){ for (const p of ['phone_harness','gemini','anthropic']){ const k=s.keys[p]; $('k-'+p).textContent = k.own ? ('yours: '+k.own) : (k.pool ? 'using shared key' : 'not set'); } }
   const canType = s.status === 'ready';

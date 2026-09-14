@@ -77,6 +77,19 @@ directly; numbers are from my own sessions, not marketing.
 
 ## What fails / platform issues
 
+- **Ended sessions keep occupying capacity until cleanup completes, and
+  the create call then fails hard.** Sequence on 2026-09-14 ~16:40 PT: two
+  sessions ended via `DELETE` (state `closing`, `cleanup_pending: true`),
+  then a new `POST /sessions` a minute later →
+  `409 This provider is at capacity; wait for the active phone's cleanup to finish.`
+  The docs do say "capacity stays occupied until cleanup is confirmed", but
+  (a) cleanup took several minutes for a phone that had only been provisioning,
+  (b) `/me` still showed `available_session_slots: 5`, so the account-level
+  number does not reflect provider capacity, and (c) there is no way to ask
+  "when will a slot free up". For a multi-user service this means every
+  "Start phone" can fail for reasons unrelated to the user; I now surface the
+  message verbatim. Request: a `Retry-After` header on that 409, and either a
+  faster cleanup path or `available_session_slots` that accounts for it.
 - **The ADB docs and the ADB endpoint disagree.** The guide and the OpenAPI
   schema say: register an `ssh-ed25519` public key, receive an SSH gateway
   (`username: shlut-adb`, pinned `host_key`, `forward_host`/`forward_port`),

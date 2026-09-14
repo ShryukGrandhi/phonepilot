@@ -88,6 +88,7 @@ class AppState:
         self.run_dir: Path | None = None
         self._account: dict[str, Any] = {}
         self._account_t = 0.0
+        self._end_requested = False
 
     # --------------------------------------------------------------- state
     def _expire_if_needed(self) -> None:
@@ -158,6 +159,15 @@ class AppState:
     def _start_session_bg(self, sid: str | None, timeout_seconds: int) -> None:
         try:
             lease = acquire(self.client, sid, timeout_seconds, self._log)
+            if self._end_requested:
+                # the user (or the orchestrator) gave up while the phone was still provisioning
+                self._log("phone became ready after an end request; releasing it")
+                if lease.created_here:
+                    release(self.client, lease.session.id, self._log)
+                self._end_requested = False
+                self.status = "no_phone"
+                self._push_state()
+                return
             self.session = lease.session
             self.device, self._close_transport = make_device(self.client, lease.session, self.transport, self._log)
             self.created_here = lease.created_here
@@ -171,6 +181,12 @@ class AppState:
     def end_session(self) -> None:
         with self.lock:
             if self.status in ("no_phone", "ending"):
+                return
+            if self.status == "starting":
+                # provisioning cannot be interrupted; flag it so the phone is released the moment it is ready
+                self._end_requested = True
+                self.status = "ending"
+                self._push_state()
                 return
             if self.agent:
                 self.agent.cancel()
@@ -248,6 +264,12 @@ class AppState:
 
     def shutdown(self) -> None:
         """End the phone (if we own it) and stop the HTTP server. Used by the sandbox orchestrator."""
+        if self.status == "starting":
+            self._end_requested = True  # _start_session_bg releases the phone when provisioning returns
+            for _ in range(900):
+                time.sleep(0.2)
+                if self.status != "ending" and self.status != "starting":
+                    break
         if self.agent:
             self.agent.cancel()
         try:

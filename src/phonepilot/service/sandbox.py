@@ -33,6 +33,7 @@ from typing import Any, Callable
 
 SANDBOX_PORT = 9000
 START_TIMEOUT_S = 60.0
+STOP_GRACE_S = 200.0  # a phone still provisioning is released only when provisioning returns
 DOCKER_IMAGE = os.environ.get("PHONEPILOT_IMAGE", "phonepilot:latest")
 
 
@@ -94,7 +95,9 @@ class ProcessBackend:
             env.pop(k, None)  # a sandbox never sees the master key or the pool
         cmd = [sys.executable, "-m", "phonepilot.cli", "sandbox", "--host", "127.0.0.1", "--port", str(port),
                "--runs-dir", str(spec.runs_dir), "--transport", spec.transport, "--max-steps", str(spec.max_steps)]
-        proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        spec.runs_dir.mkdir(parents=True, exist_ok=True)
+        logfile = open(spec.runs_dir.parent / f"sandbox-{port}.log", "ab")  # noqa: SIM115 — lives as long as the process
+        proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=logfile, stderr=subprocess.STDOUT)
         sb = Sandbox(id=f"proc-{proc.pid}", user_id=spec.user_id, base_url=f"http://127.0.0.1:{port}", token=token,
                      backend=self.name, started=time.time(), handle=proc)
         _wait_healthy(sb, lambda: proc.poll() is not None)
@@ -107,7 +110,7 @@ class ProcessBackend:
         except SandboxError:
             pass
         try:
-            proc.wait(timeout=15)
+            proc.wait(timeout=STOP_GRACE_S)  # shutdown ends the phone first, which can take a while
         except subprocess.TimeoutExpired:
             proc.kill()
 
@@ -163,6 +166,9 @@ class DockerBackend:
             sb.request("POST", "/api/shutdown", {}, timeout=10)  # lets it end the phone cleanly
         except SandboxError:
             pass
+        deadline = time.monotonic() + STOP_GRACE_S
+        while time.monotonic() < deadline and self.alive(sb):
+            time.sleep(1.0)
         subprocess.run(["docker", "rm", "-f", sb.handle], capture_output=True, timeout=60)
 
     def alive(self, sb: Sandbox) -> bool:

@@ -6,6 +6,7 @@ import http.client
 import json
 import threading
 import time
+from pathlib import Path
 from http.cookies import SimpleCookie
 
 import httpx
@@ -223,6 +224,50 @@ def test_isolation_between_two_users(service):
     # secrets never appear in the sqlite file in plaintext
     raw = (svc.data_dir / "phonepilot.sqlite3").read_bytes()
     assert b"pck_userA_key" not in raw and b"AIzaSy_user_A" not in raw and b"correct horse battery" not in raw
+
+
+def test_stale_no_phone_snapshot_does_not_cancel_a_pending_start(tmp_path):
+    """The sandbox's initial 'hello' (status no_phone) can arrive after we asked it to start; it must be ignored."""
+    from phonepilot.service.runtime import KeyResolver, Limits, Pool, UserRuntime
+    from phonepilot.service.store import Store
+
+    store = Store(tmp_path / "db.sqlite3")
+    user = store.create_user("a@x.io", b"h", b"s")
+    rt = UserRuntime(user, store, KeyResolver(store, SecretBox(MASTER), Pool(None, None, None)), Limits(), tmp_path, backend=None)
+    rt.status = "starting"
+    rt._start_pending = True
+    rt._absorb_state({"status": "no_phone", "session_id": None})      # stale snapshot
+    assert rt.status == "starting"
+    rt._absorb_state({"status": "starting", "session_id": None})      # sandbox acknowledged
+    assert rt.status == "starting" and not rt._start_pending
+    rt._absorb_state({"status": "ready", "session_id": "s1", "seconds_left": 600})
+    assert rt.status == "ready" and rt.session_id == "s1" and store.phone_owner("s1") == user.id
+    rt._absorb_state({"status": "no_phone", "session_id": None})      # a real end
+    assert rt.status == "no_phone" and rt.session_id is None and store.open_phones(user.id) == []
+
+
+def test_sandbox_end_during_provisioning_releases_phone(phone, monkeypatch, tmp_path):
+    """AppState (the sandbox) must release a phone that becomes ready after an end request."""
+    import phonepilot.web.server as ws
+    from phonepilot.sessions import Lease
+
+    gate = threading.Event()
+    phone.state = "ready"
+    client = PhoneHarnessClient(api_key="test-key", transport=httpx.MockTransport(phone.handle), sleep=lambda s: None)
+
+    def slow_acquire(c, sid, timeout, log):  # provisioning that we control
+        gate.wait(5)
+        return Lease(c.get_session("fake123"), created_here=True, ready_wait_s=0.0)
+
+    monkeypatch.setattr(ws, "acquire", slow_acquire)
+    app = ws.AppState(client, ScriptedBrain([]), tmp_path, log=None)
+    app.start_session(300)
+    assert app.status == "starting"
+    app.end_session()  # while provisioning
+    assert app.status == "ending" and app._end_requested
+    gate.set()
+    assert wait_for(lambda: app.status == "no_phone", timeout=10)
+    assert phone.state == "closing", "the phone was released as soon as it became ready"
 
 
 def test_security_headers_present(service):

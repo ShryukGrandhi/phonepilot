@@ -137,6 +137,8 @@ class UserRuntime:
         self.run_id: str | None = None
         self.last_used = time.time()
         self._watcher: threading.Thread | None = None
+        self._start_pending = False  # we asked the sandbox to start a phone; ignore stale no_phone snapshots
+        self.last_error: str | None = None
 
     # -------------------------------------------------------------- state
     def state(self) -> dict[str, Any]:
@@ -152,6 +154,7 @@ class UserRuntime:
             "transport": self.limits.transport,
             "run_dir": r.get("run_dir"),
             "sandbox": {"backend": self.sandbox.backend, "id": self.sandbox.id} if self.sandbox else None,
+            "last_error": self.last_error,
             "user": {"email": self.user.email, "is_admin": self.user.is_admin},
             "keys": self.keys.summary(self.user.id),
             "quota": {
@@ -212,6 +215,9 @@ class UserRuntime:
                     self._absorb_state(event)
                     self.hub.publish("state", **self.state())
                     continue
+                if event.get("kind") == "log" and str(event.get("text", "")).startswith("phone failed to start"):
+                    self.last_error = str(event["text"])
+                    self._start_pending = False
                 if event.get("kind") == "task":
                     self.run_id = None
                 if event.get("kind") == "step" and self.run_id is None and self.session_id:
@@ -230,6 +236,12 @@ class UserRuntime:
                 self._push_state()
 
     def _absorb_state(self, remote: dict[str, Any]) -> None:
+        rs = remote.get("status")
+        if rs == "no_phone" and self._start_pending:
+            # stale snapshot from before the sandbox processed our start request; ignore
+            return
+        if rs in ("starting", "ready", "running"):
+            self._start_pending = False
         self.remote = {k: remote.get(k) for k in ("status", "session_id", "screen", "seconds_left", "task", "brain", "run_dir")}
         new_sid = remote.get("session_id")
         if new_sid and new_sid != self.session_id:
@@ -247,10 +259,12 @@ class UserRuntime:
                 self.store.end_phone(self.session_id)
             self.session_id = None
             self.status = "no_phone"
+            self._start_pending = False
 
     # ------------------------------------------------------------ session
     def start_session(self, timeout_seconds: int | None) -> None:
         timeout = min(int(timeout_seconds or self.limits.default_session_timeout_s), self.limits.max_session_timeout_s)
+        self.last_error = None
         with self.lock:
             if self.status != "no_phone":
                 raise RuntimeError(f"cannot start a phone while status is {self.status}")
@@ -275,6 +289,7 @@ class UserRuntime:
         threading.Thread(target=self._start_bg, args=("/api/session/attach", {"session_id": sid}), daemon=True).start()
 
     def _start_bg(self, path: str, body: dict[str, Any]) -> None:
+        self._start_pending = True
         try:
             sb = self._ensure_sandbox()
             status, data, _ = sb.request("POST", path, body)
@@ -282,6 +297,7 @@ class UserRuntime:
                 raise SandboxError(json.loads(data or b"{}").get("error", f"sandbox answered {status}"))
         except Exception as exc:  # noqa: BLE001
             self._log(f"phone failed to start: {exc}")
+            self._start_pending = False
             self.status = "no_phone"
             self._push_state()
 
@@ -299,8 +315,11 @@ class UserRuntime:
         sid = self.session_id
         if self.sandbox:
             try:
+                self._start_pending = False
                 self.sandbox.request("POST", "/api/session/end", {})
-                for _ in range(100):  # wait for the sandbox to report no_phone (release() done)
+                # wait for the sandbox to report no_phone (release() done); a phone that is still
+                # provisioning is ended by the sandbox as soon as provisioning returns (~2 min)
+                for _ in range(900):
                     time.sleep(0.2)
                     if self.remote.get("status") == "no_phone":
                         break
