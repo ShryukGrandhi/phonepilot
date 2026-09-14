@@ -1,0 +1,33 @@
+[project]
+name = "phonepilot"
+version = "0.1.0"
+description = "Natural-language phone agent on Phone Harness Cloud: observe, decide, act, verify."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "httpx>=0.27",
+  "pillow>=10",
+  "python-dotenv>=1.0",
+  "rich>=13",
+  "anthropic>=0.40",
+  "google-genai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5"]
+
+[project.scripts]
+phonepilot = "phonepilot.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/phonepilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: hits the real Phone Harness Cloud API (costs credits)"]
+addopts = "-m 'not live'"

@@ -1,0 +1,188 @@
+# PhonePilot
+
+A general phone agent on **Phone Harness Cloud**: give it a sentence, it drives
+a real cloud Android phone until the job is done and shows its work.
+
+```
+$ phonepilot run "Add a contact named Ada Lovelace with phone 555-0199 and confirm it shows in the list"
+created session 5d7008187bb9 (timeout 1200s) provisioning…
+session 5d7008187bb9 ready after 139s: screen (720, 1280), 17 ops
+[1] launch_app(package='com.android.contacts')  — Opening Contacts to add the new entry.
+    -> Launched com.android.contacts. Screen changed.
+[2] tap(element=7)  — Tapping the "Create new contact" button.
+    -> Tapped [7] 'Create new contact' at (582,1150). Screen changed.
+…
+SUCCESS after 9 steps: Created contact Ada Lovelace (555-0199); it is listed under A.
+trace: runs/20260914-131500-add-a-contact-named-ada/report.html
+```
+
+Every run leaves a folder with each step's screenshot (with the element marks
+the model saw), the model's one-line reasoning, the action, and what the phone
+did in response — as `trace.jsonl`, a self-contained `report.html`, and
+optionally an mp4.
+
+## Setup
+
+Requirements: Python 3.11+, a Phone Harness Cloud API key, and one model key
+(Anthropic or Gemini). `ffmpeg` on PATH only if you want `phonepilot video`.
+
+```bash
+git clone https://github.com/ShryukGrandhi/phonepilot && cd phonepilot
+python -m venv .venv && . .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+cp .env.example .env                                # then fill in the keys
+```
+
+`.env`:
+
+```
+PHONE_HARNESS_API_KEY=pck_…
+ANTHROPIC_API_KEY=sk-ant-…      # preferred; uses claude-sonnet-5 by default
+GEMINI_API_KEY=AIza…            # or this; uses gemini-2.5-flash by default
+PHONEPILOT_BRAIN=anthropic      # optional: force a provider
+PHONEPILOT_MODEL=               # optional: override the model id
+```
+
+Check the wiring without spending phone minutes:
+
+```bash
+phonepilot account        # balance, price per minute, session slots
+pytest                    # 46 offline tests against a fake of the cloud API
+```
+
+## Usage
+
+```bash
+# one task on a fresh phone; the phone is ended when the run finishes
+phonepilot run "Open Settings and turn on the dark theme"
+
+# keep the phone for more tasks (provisioning is ~2 min, so reuse pays off)
+phonepilot run "Set an alarm for 6:30 AM on weekdays" --keep
+phonepilot run "Now delete that alarm" --session 5d7008187bb9
+
+# interactive: many instructions on one phone
+phonepilot chat
+phone (1180s left) › open the clock app and start a stopwatch
+phone (1102s left) › /shot            # save shot.png
+phone (1102s left) › /viewer          # live viewer URL for the dashboard
+phone (1102s left) › /end
+
+# plumbing
+phonepilot start                       # provision, print the session id
+phonepilot sessions                    # what is running
+phonepilot shot SID out.png --marks    # screenshot with numbered elements
+phonepilot op SID input.tap x=360 y=640
+phonepilot op SID tree
+phonepilot end SID
+phonepilot history                     # finished sessions and cost
+
+# after a run
+phonepilot report runs/<run>           # open report.html
+phonepilot video  runs/<run>           # render demo.mp4 (ffmpeg)
+```
+
+Flags for `run`/`chat`: `--brain {anthropic,gemini}`, `--model`, `--max-steps`
+(default 25), `--timeout` (new session lifetime, default 900 s), `--session`,
+`--keep`, `--runs-dir`.
+
+## How it works
+
+```
+                 ┌──────────────┐  Observation   ┌───────────┐
+   screenshot ─▶ │              │ ─────────────▶ │           │
+   tree       ─▶ │   observe    │  numbered      │   brain   │ ── one tool call ──▶ execute on Device
+   current app─▶ │              │  elements +    │ (Claude / │                         │
+                 └──────────────┘  marked image  │  Gemini)  │ ◀── feedback ───────────┘
+                        ▲                        └───────────┘   "Tapped [7] 'Save'.
+                        │                                         Screen changed."
+                        └───────── the verify capture becomes the next observation
+```
+
+`src/phonepilot/`
+
+| module | role |
+|---|---|
+| `cloud.py` | typed client for the Cloud API: sessions, `/op`, snapshot, viewer, account, history, APK, ADB. One request funnel, status → typed exceptions, retries only on reads and keyed creates. |
+| `device.py` | the phone as an object: `tap`, `scroll`/`swipe`, `type_text`, `launch`, `tree()`, `screenshot()`, ASCII sanitising, frame diffing. |
+| `observe.py` | picks actionable accessibility nodes, numbers them in reading order, draws the numbers on the screenshot (set-of-mark). |
+| `brain/` | the model contract (`base.py`: tool schema, system prompt, action validation) and two adapters (`anthropic.py`, `gemini.py`) that keep their own message history and prune old screenshots. |
+| `agent.py` | the loop: observe → decide → act → verify; repeat-without-effect nudges; step and deadline budgets; always records the run. |
+| `sessions.py` | acquire/reuse/release a phone, ends what it created even on crash. |
+| `trace.py`, `video.py` | run folder, `report.html`, mp4 rendering. |
+| `cli.py` | `phonepilot` commands. |
+
+## Design decisions
+
+**Tap by element number, not by pixel.** The model is shown the accessibility
+tree as `[7] Button text='Save' @(582,1150)` and the same `7` drawn on the
+screenshot. `tap(element=7)` hits the node's exact center. Pixel-guessing from a
+downscaled image is where most vision agents lose; on this phone the tree is
+reliable for stock apps, so the screenshot is for *understanding* and the tree
+is for *aiming*. `tap_xy` stays available for custom-drawn UI.
+
+**Verify every action, and say so to the model.** After each action the agent
+takes a fresh `screen.capture`, diffs it against the pre-action frame, and
+tells the model "Screen changed" or "Screen did NOT change (possible no-op)".
+Three identical no-op actions in a row trigger an explicit nudge. This is the
+cheapest reliability win I found: without it, models happily tap the same dead
+spot five times.
+
+**One capture per step.** The verify frame is reused as the next observation's
+image, so a step costs one `screen.capture` (~2 s) plus one `tree` (~1.5–5 s),
+not two captures. I use `screen.capture` rather than the cheaper `frame.png`
+because the snapshot endpoint is coalesced (≤1 capture / 2 s) and can hand back
+the *pre-action* frame — see NOTES.md.
+
+**Provider-neutral tool vocabulary.** Eleven tools (`tap`, `tap_xy`,
+`long_press`, `type_text`, `press_key`, `scroll`, `swipe`, `launch_app`,
+`navigate`, `wait`, `done`) are defined once as JSON schema and translated into
+Anthropic tool-use and Gemini function declarations. Every tool carries a
+`reason` string so the trace has the model's one-line rationale even when a
+provider returns no free text alongside a forced tool call.
+
+**`scroll` is content-direction, `swipe` is finger-direction.** `scroll("down")`
+means "show me what is further down" (finger moves up); `swipe("up")` means the
+thumb moves up (next item in a feed). Both exist because English uses both,
+and the phone-harness helper library made the same call.
+
+**Bounded context.** Only the last 3 screenshots stay in the model's context;
+older turns keep their text and tool results but the image is replaced with a
+placeholder. Runs of 20+ steps stay fast and cheap.
+
+**Budgets everywhere.** Step cap, session deadline (`expires_at` from the API)
+with a safety margin, and a session lease that ends the phone in a `finally`.
+Runs also record an estimated phone-time cost from `/me`'s
+`price_cents_per_minute`.
+
+**Sanitise text, don't fail.** `input.text` accepts printable ASCII only and
+rejects a literal `%s`. `Device.type_text` folds accents (é→e), maps smart
+quotes/dashes, drops the rest, and splits `%s` into two sends, then reports the
+exact string that was typed back to the model.
+
+**Never retry a phone op.** Ops are serialized and not idempotent server-side
+(a retried tap is a second tap). The client retries only GETs and keyed
+session creates.
+
+## Testing
+
+`pytest` runs 46 offline tests in under 3 s: the cloud client against an
+in-memory fake of the service (`tests/conftest.py`), the device wrapper, element
+selection and marking, the agent loop with a scripted brain (happy path, bad
+element, no-op nudges, step cap, deadline, phone refusals, brain crash), the
+session lease, and both model adapters with stubbed SDK clients (tool-result
+plumbing and image pruning). Live runs against the real API are what the
+`runs/` folder and the demo video document.
+
+## Limits and known gaps
+
+- The phone is an AOSP Cuttlefish emulator: no Google services, no Play Store,
+  no Chrome, no SIM. Tasks needing those end with `success=false` and a reason.
+- Typing is ASCII-only (platform limit; see NOTES.md).
+- Apps with custom-drawn UI (games, some web views) expose few accessibility
+  nodes; the agent falls back to `tap_xy` from the screenshot, which is less
+  reliable.
+- One task at a time per phone. Ops are serialized per phone by the service.
+
+## License
+
+MIT.
