@@ -77,6 +77,23 @@ directly; numbers are from my own sessions, not marketing.
 
 ## What fails / platform issues
 
+- **The ADB docs and the ADB endpoint disagree.** The guide and the OpenAPI
+  schema say: register an `ssh-ed25519` public key, receive an SSH gateway
+  (`username: shlut-adb`, pinned `host_key`, `forward_host`/`forward_port`),
+  open an `ssh -N -L` tunnel, then `adb connect 127.0.0.1:15555`. The live
+  endpoint on 2026-09-14 (session `4bd38736221c`) rejects an ed25519 key with
+  `400 expected one ADB public key (the contents of adbkey.pub)`, and on
+  success answers a different shape entirely:
+  `{"enabled": true, "transport": "adb", "host": "live.phone-harness.com", "port": 22220, "expires_at": …}`.
+  What actually works: send `~/.android/adbkey.pub`, then `adb connect
+  live.phone-harness.com:22220`. No SSH at all; adbd authenticates the client
+  by its RSA key. My client now tries the adb key first and only falls back to
+  the documented SSH flow if the service asks for it. The direct path is
+  simpler for users (no OpenSSH, no known_hosts) but the docs should say so,
+  and `AdbConnection` in the OpenAPI should gain the `transport: "adb"`
+  variant. Measured over that connection: `adb connect` 0.2 s, `screencap -p`
+  0.8 s (vs 2.0 s for `screen.capture` over HTTP), `uiautomator dump` 2.5 s.
+
 - **`apps.launch` answers HTTP 500 for anything it cannot launch.** Reproduced
   on session `2d136f1b0934` with three inputs: a package that is not installed
   (`com.definitely.not.installed`), a package that does not exist on this image
@@ -174,10 +191,32 @@ Session `5d7008187bb9` (1200 s, three tasks back to back, Gemini 2.5 Flash):
 5. Pre-granted runtime permissions / an option to start from a clean profile.
 6. Distinct error codes for "op does not exist" vs "op unsupported here".
 
+## ADB transport, in practice
+
+Once connected (see the docs mismatch above), stock adb against the redroid
+container behaved like a local device, with a few things worth knowing:
+
+- `monkey -p <pkg> -c LAUNCHER 1` exits 251 with no output on this image, so
+  launching is `cmd package resolve-activity --brief … <pkg>` then
+  `am start -W -n <component>`. Works, 1.2–2.5 s.
+- `uiautomator dump /dev/tty` must be read with `adb exec-out`, not
+  `adb shell` (the pty path mangled the XML into nothing).
+- `adb shell input text` is slow (4.7 s for "about phone") and typing straight
+  after tapping Settings' search box lost the first two characters; a ~1 s
+  settle before typing fixes it. The HTTP `input.text` op never dropped
+  characters in my runs.
+- `pm grant com.android.contacts android.permission.POST_NOTIFICATIONS` works,
+  which removes the first-launch permission dialog the HTTP-only agent has to
+  click through. That alone is a reason to offer a `grant` op over HTTP.
+- `logcat -d` works: app crashes become diagnosable, which the QA use case
+  needs.
+- Revocation is clean: `DELETE /sessions/{sid}/adb` → `GET` returns
+  `{"enabled": false}` and the TCP endpoint stops accepting.
+
 ## What I did not get to
 
-- ADB over the SSH tunnel: read the guide and the schema, did not open a tunnel
-  (the HTTP ops covered everything the agent needed).
+- The SSH-tunnel variant of ADB from the docs: implemented, but the live
+  service never offered it, so it is untested.
 - APK upload: the agent drives preinstalled apps only.
 - The Anthropic adapter is written and unit-tested against a stubbed SDK but
   every live run used Gemini, because that was the working key on this

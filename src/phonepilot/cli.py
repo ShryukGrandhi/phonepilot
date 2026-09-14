@@ -56,18 +56,20 @@ def main(argv: list[str] | None = None) -> int:
 def cmd_run(args) -> int:
     from .agent import Agent, AgentConfig, new_trace
     from .brain import make_brain
-    from .device import Device
-    from .sessions import leased
+    from .sessions import leased, make_device
 
     brain = make_brain(args.brain, args.model)
-    log(f"phonepilot {__version__} · brain {brain.name}/{brain.model}")
+    log(f"phonepilot {__version__} · brain {brain.name}/{brain.model} · transport {args.transport}")
     with PhoneHarnessClient() as client:
         price = _price(client)
         with leased(client, args.session, args.timeout, args.keep, log) as lease:
-            device = Device(client, lease.session)
-            trace = new_trace(args.task, lease.session.id, brain, Path(args.runs_dir), price, lease.ready_wait_s)
-            agent = Agent(device, brain, trace, AgentConfig(max_steps=args.max_steps), log)
-            outcome = agent.run(args.task)
+            device, close_transport = make_device(client, lease.session, args.transport, log)
+            try:
+                trace = new_trace(args.task, lease.session.id, brain, Path(args.runs_dir), price, lease.ready_wait_s)
+                agent = Agent(device, brain, trace, AgentConfig(max_steps=args.max_steps), log)
+                outcome = agent.run(args.task)
+            finally:
+                close_transport()
     _print_outcome(outcome)
     return 0 if outcome.success else 1
 
@@ -75,15 +77,14 @@ def cmd_run(args) -> int:
 def cmd_chat(args) -> int:
     from .agent import Agent, AgentConfig, new_trace
     from .brain import make_brain
-    from .device import Device
-    from .sessions import leased
+    from .sessions import leased, make_device
 
     brain = make_brain(args.brain, args.model)
-    log(f"phonepilot {__version__} · brain {brain.name}/{brain.model}")
+    log(f"phonepilot {__version__} · brain {brain.name}/{brain.model} · transport {args.transport}")
     with PhoneHarnessClient() as client:
         price = _price(client)
         with leased(client, args.session, args.timeout, args.keep, log) as lease:
-            device = Device(client, lease.session)
+            device, close_transport = make_device(client, lease.session, args.transport, log)
             log("Phone ready. Type a task, or /shot, /apps, /viewer, /end. Ctrl-D to quit.")
             while True:
                 left = device.seconds_left()
@@ -109,6 +110,7 @@ def cmd_chat(args) -> int:
                 trace = new_trace(task, lease.session.id, brain, Path(args.runs_dir), price, lease.ready_wait_s)
                 outcome = Agent(device, brain, trace, AgentConfig(max_steps=args.max_steps), log).run(task)
                 _print_outcome(outcome)
+            close_transport()
     return 0
 
 
@@ -120,7 +122,7 @@ def cmd_web(args) -> int:
     log(f"phonepilot {__version__} · brain {brain.name}/{brain.model}")
     with PhoneHarnessClient() as client:
         serve(client, brain, Path(args.runs_dir), args.host, args.port, args.session, args.max_steps,
-              open_browser=not args.no_open, log=log)
+              open_browser=not args.no_open, log=log, transport=args.transport)
     return 0
 
 
@@ -264,6 +266,8 @@ def _parser() -> argparse.ArgumentParser:
         sp.add_argument("--model", default=None)
         sp.add_argument("--max-steps", type=int, default=25)
         sp.add_argument("--runs-dir", default="runs")
+        sp.add_argument("--transport", choices=["http", "adb"], default=os.environ.get("PHONEPILOT_TRANSPORT", "http"),
+                        help="how to drive the phone: Cloud API ops (http) or stock adb via the /adb endpoint")
 
     def session_opts(sp):
         sp.add_argument("--session", "-s", default=None, help="reuse an existing ready session id")

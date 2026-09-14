@@ -117,9 +117,35 @@ bash scripts/demo.sh                   # or: bash scripts/demo.sh my_tasks.txt
 python scripts/make_demo_video.py runs/demo-<stamp> --out docs/demo.mp4
 ```
 
-Flags for `run`/`chat`: `--brain {anthropic,gemini}`, `--model`, `--max-steps`
-(default 25), `--timeout` (new session lifetime, default 900 s), `--session`,
-`--keep`, `--runs-dir`.
+Flags for `run`/`chat`/`web`: `--brain {anthropic,gemini}`, `--model`,
+`--max-steps` (default 25), `--timeout` (new session lifetime, default 900 s),
+`--session`, `--keep`, `--runs-dir`, `--transport {http,adb}`.
+
+### Two transports: Cloud API ops or stock adb
+
+```bash
+phonepilot run "…" --transport http   # default: POST /sessions/{id}/op for every action
+phonepilot run "…" --transport adb    # register adb's key via POST /sessions/{id}/adb, then adb connect
+```
+
+Both drive the same agent loop; only the phone object differs
+(`device.Device` vs `adb.AdbDevice`, same method surface). The ADB transport
+needs Android platform-tools on PATH and gives you what the HTTP vocabulary
+deliberately lacks: `shell()`, `grant()` (pre-grant runtime permissions),
+`logcat()`, and a faster screenshot (`screencap -p` ≈ 0.8 s vs
+`screen.capture` ≈ 2 s). Measured on session `4bd38736221c`:
+
+| op | HTTP ops | adb |
+|---|---|---|
+| screenshot | 2.0 s | 0.8 s |
+| hierarchy | 1.5–5 s (`tree`) | 2.5 s (`uiautomator dump`) |
+| tap | 0.5 s | 0.13 s |
+| launch app | 2.5 s | 1.2–2.5 s |
+| foreground app | 0.5 s | 0.15 s |
+
+The live `/adb` endpoint currently returns a direct ADB-over-TCP endpoint
+(`transport: "adb"`), not the SSH tunnel the docs describe; the client handles
+both shapes (see NOTES.md).
 
 ## How it works
 

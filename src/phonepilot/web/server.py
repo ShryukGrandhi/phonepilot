@@ -27,8 +27,7 @@ from typing import Any, Callable
 from ..agent import Agent, AgentConfig, new_trace
 from ..brain.base import Brain
 from ..cloud import CloudError, PhoneHarnessClient, Session
-from ..device import Device
-from ..sessions import acquire, release
+from ..sessions import acquire, make_device, release
 from ..trace import StepRecord
 
 INDEX_HTML = Path(__file__).with_name("index.html")
@@ -70,16 +69,18 @@ class AppState:
     """Owns the cloud client, one phone, and at most one running agent."""
 
     def __init__(self, client: PhoneHarnessClient, brain: Brain, runs_dir: Path, max_steps: int = 25,
-                 log: Callable[[str], None] | None = None):
+                 log: Callable[[str], None] | None = None, transport: str = "http"):
         self.client = client
         self.brain = brain
         self.runs_dir = runs_dir
         self.max_steps = max_steps
         self.terminal_log = log
+        self.transport = transport
+        self._close_transport: Callable[[], None] = lambda: None
         self.hub = Hub()
         self.lock = threading.Lock()
         self.session: Session | None = None
-        self.device: Device | None = None
+        self.device: Any = None  # Device or AdbDevice, same surface
         self.created_here = False
         self.status = "no_phone"  # no_phone | starting | ready | running | ending
         self.task: str | None = None
@@ -100,6 +101,7 @@ class AppState:
             "seconds_left": int(self.device.seconds_left() or 0) if self.device else None,
             "task": self.task,
             "brain": f"{self.brain.name}/{self.brain.model}",
+            "transport": self.transport,
             "balance_cents": acct.get("balance_cents"),
             "price_cents_per_minute": acct.get("price_cents_per_minute"),
             "run_dir": self.run_dir.name if self.run_dir else None,
@@ -143,7 +145,7 @@ class AppState:
         try:
             lease = acquire(self.client, sid, timeout_seconds, self._log)
             self.session = lease.session
-            self.device = Device(self.client, lease.session)
+            self.device, self._close_transport = make_device(self.client, lease.session, self.transport, self._log)
             self.created_here = lease.created_here
             self.status = "ready"
             self._account_t = 0.0
@@ -163,6 +165,11 @@ class AppState:
         threading.Thread(target=self._end_session_bg, daemon=True).start()
 
     def _end_session_bg(self) -> None:
+        try:
+            self._close_transport()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"transport close failed: {exc}")
+        self._close_transport = lambda: None
         if self.session:
             try:
                 release(self.client, self.session.id, self._log)
@@ -358,8 +365,9 @@ def serve(
     max_steps: int = 25,
     open_browser: bool = True,
     log: Callable[[str], None] = print,
+    transport: str = "http",
 ) -> None:
-    app = AppState(client, brain, runs_dir, max_steps, log=log)
+    app = AppState(client, brain, runs_dir, max_steps, log=log, transport=transport)
     server = make_server(app, host, port)
     url = f"http://{host}:{server.server_address[1]}/"
     log(f"PhonePilot web UI at {url}  (Ctrl-C to quit)")

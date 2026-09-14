@@ -35,6 +35,7 @@ SETTLE_S = {"tap": 0.8, "tap_xy": 0.8, "long_press": 0.6, "type_text": 0.6, "pre
 REPEAT_LIMIT = 3
 CYCLE_WINDOW = 4  # A B A B  -> alternating without progress
 MAX_CONSECUTIVE_SERVER_ERRORS = 3  # op 5xx becomes feedback until this many in a row
+PRE_TYPE_SETTLE_S = 1.0  # tapping a field, then typing too soon, drops leading characters over adb
 MIN_SECONDS_LEFT = 25
 TRANSITION_FRACTION = 0.25   # more than this much of the screen moved -> maybe still animating
 TRANSITION_SETTLE_S = 1.0
@@ -232,7 +233,7 @@ class Agent:
             if a.get("element") is not None:
                 e = obs.element(a["element"])
                 d.tap(e.node.x, e.node.y)
-                time.sleep(0.5)
+                time.sleep(PRE_TYPE_SETTLE_S)  # let the field (or a search activity) take focus first
                 target = f" into [{e.index}] {e.node.label!r}"
             sent = d.type_text(a["text"], submit=bool(a.get("submit")))
             return f"Typed {sent!r}{target}{' and pressed Enter' if a.get('submit') else ''}"

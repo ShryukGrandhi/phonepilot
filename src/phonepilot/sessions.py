@@ -78,6 +78,25 @@ def leased(
             log(f"keeping session {lease.session.id} alive (--keep); end it with: phonepilot end {lease.session.id}")
 
 
+def make_device(client: PhoneHarnessClient, session: Session, transport: str = "http",
+                log: Callable[[str], None] = print):
+    """Build the phone object for a ready session on the chosen transport.
+
+    Returns (device, closer). `closer()` tears down anything the transport opened
+    (the adb connection / tunnel); it never ends the session itself.
+    """
+    from .device import Device
+
+    if transport == "http":
+        return Device(client, session), (lambda: None)
+    if transport == "adb":
+        from .adb import AdbDevice, AdbTunnel
+
+        tunnel = AdbTunnel(client, session, log=log).open()
+        return AdbDevice(tunnel, session), tunnel.close
+    raise ValueError(f"unknown transport {transport!r}; use 'http' or 'adb'")
+
+
 def _progress(log: Callable[[str], None]):
     last = {"t": 0.0}
 

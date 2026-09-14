@@ -12,6 +12,7 @@ dependencies = [
   "rich>=13",
   "anthropic>=0.40",
   "google-genai>=1.0",
+  "cryptography>=42",
 ]
 
 [project.optional-dependencies]
