@@ -108,6 +108,19 @@ def test_phone_refusal_is_reported_as_feedback(device, phone, tmp_path):
     assert feedback.startswith("Phone refused the action")
 
 
+def test_op_server_error_is_feedback_until_it_repeats(device, phone, tmp_path):
+    class Faulting(ScriptedBrain):
+        def decide(self, observation, feedback):
+            phone.fail_next_op = {"status": 500, "payload": {"error": "The phone service could not complete this request."}}
+            return super().decide(observation, feedback)
+
+    brain = Faulting([Action("launch_app", {"package": "com.android.dialer"})] * 4)
+    outcome, _ = run(device, brain, tmp_path)
+    assert brain.seen[1][1].startswith("Phone service error while doing launch_app")
+    assert brain.seen[2][1].startswith("Phone service error")
+    assert outcome.success is False and outcome.error and "500" in outcome.error, "third consecutive 5xx aborts"
+
+
 def test_brain_crash_is_recorded(device, phone, tmp_path):
     class Boom(ScriptedBrain):
         def decide(self, observation, feedback):

@@ -34,6 +34,7 @@ SETTLE_S = {"tap": 0.8, "tap_xy": 0.8, "long_press": 0.6, "type_text": 0.6, "pre
             "scroll": 1.0, "swipe": 1.0, "launch_app": 1.5, "navigate": 0.8, "wait": 0.0}
 REPEAT_LIMIT = 3
 CYCLE_WINDOW = 4  # A B A B  -> alternating without progress
+MAX_CONSECUTIVE_SERVER_ERRORS = 3  # op 5xx becomes feedback until this many in a row
 MIN_SECONDS_LEFT = 25
 TRANSITION_FRACTION = 0.25   # more than this much of the screen moved -> maybe still animating
 TRANSITION_SETTLE_S = 1.0
@@ -72,6 +73,7 @@ class Agent:
         self.config = config
         self.log = log
         self._next_image: Image.Image | None = None
+        self._server_errors = 0
 
     # ------------------------------------------------------------------ run
     def run(self, task: str) -> Outcome:
@@ -154,8 +156,16 @@ class Agent:
             return f"Action rejected: {exc}", False
         except CloudError as exc:
             if exc.status in (400, 409):
+                self._server_errors = 0
                 return f"Phone refused the action ({exc.payload.get('error', exc)})", False
+            if exc.status >= 500 and self._server_errors + 1 < MAX_CONSECUTIVE_SERVER_ERRORS:
+                # e.g. apps.launch on a package that is not installed answers 500 today;
+                # let the model route around it instead of aborting the whole run
+                self._server_errors += 1
+                return (f"Phone service error while doing {action.name} ({exc.payload.get('error', exc)}). "
+                        f"Try a different approach."), False
             raise
+        self._server_errors = 0
         time.sleep(SETTLE_S.get(action.name, 0.8))
         after = self.settled_capture(obs.image)
         self._next_image = after

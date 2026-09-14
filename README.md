@@ -61,7 +61,7 @@ Check the wiring without spending phone minutes:
 
 ```bash
 phonepilot account        # balance, price per minute, session slots
-pytest                    # 59 offline tests against a fake of the cloud API
+pytest                    # 62 offline tests against a fake of the cloud API
 ```
 
 ## Usage
@@ -181,9 +181,27 @@ exact string that was typed back to the model.
 (a retried tap is a second tap). The client retries only GETs and keyed
 session creates.
 
+## Results
+
+Demo session `2d136f1b0934`, one phone, four tasks back to back, Gemini 2.5
+Flash. Traces with every screenshot are in `docs/runs/`; the stitched video is
+`docs/demo.mp4`.
+
+| task | steps | wall | outcome |
+|---|---|---|---|
+| Add contact Grace Hopper (555-0142), confirm in list | 9 | 90 s | ✅ handled the first-run permission dialog, went back to the list to verify |
+| Set a 6:30 AM alarm, list all alarms | 11 | 114 s | ✅ picker defaulted to PM; agent caught it on the verify frame and fixed it |
+| Read Android version + device name | 8 | 96 s | ✅ "Android 15, redroid15_arm64" |
+| Order a pizza from DoorDash (no Play Store) | 12 | ~150 s | ❌ by design: `done(success=false)` with the blocking reason |
+
+The dev session before it (`5d7008187bb9`) ran the same three positive tasks
+at 8 / 12 / 12 steps, all successful; the one thing that changed between the
+two sessions was the per-step verification (see NOTES.md for the lessons).
+Phone time for all seven runs: about $5.
+
 ## Testing
 
-`pytest` runs 59 offline tests in under 4 s: the cloud client against an
+`pytest` runs 62 offline tests in under 4 s: the cloud client against an
 in-memory fake of the service (`tests/conftest.py`), the device wrapper, element
 selection and marking, the agent loop with a scripted brain (happy path, bad
 element, no-op nudges, step cap, deadline, phone refusals, brain crash), the

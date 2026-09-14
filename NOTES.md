@@ -77,6 +77,17 @@ directly; numbers are from my own sessions, not marketing.
 
 ## What fails / platform issues
 
+- **`apps.launch` answers HTTP 500 for anything it cannot launch.** Reproduced
+  on session `2d136f1b0934` with three inputs: a package that is not installed
+  (`com.definitely.not.installed`), a package that does not exist on this image
+  (`com.android.dialer`), and an installed package with no launcher activity
+  (`com.android.phone`). All three return
+  `500 {"error": "The phone service could not complete this request."}`.
+  A 500 reads as "the platform broke", so my agent initially aborted the whole
+  run on it; it now treats op-level 5xx as feedback for the model (up to three
+  in a row). Expected: `404` / `400` with a `code` like `package_not_found` or
+  `not_launchable`, and ideally the closest installed match in the body.
+
 - **`input.text` cannot type non-ASCII.** Documented, but for a general phone
   agent it is a real gap: any name with an accent, any emoji, any non-Latin
   script silently loses characters (I fold to ASCII client-side). Request:
@@ -123,6 +134,16 @@ Session `5d7008187bb9` (1200 s, three tasks back to back, Gemini 2.5 Flash):
   `settle_ms` parameter on `screen.capture` ("wait until N consecutive frames
   match, up to a cap") would let clients stop guessing. I do that client-side
   now at ~2 s per extra capture.
+- **The phone has real internet, and the WebView shell is usable.** Given
+  "Order a pizza from DoorDash" (deliberately impossible: no Play Store), the
+  agent used the launcher's Quick Search Box, got web results, opened
+  doordash.com in *WebView Browser Tester*, passed a "verifying you are human"
+  interstitial without doing anything, and got as far as the delivery-address
+  field before the site's app-scheme redirect dropped it on "Webpage not
+  available". Two takeaways: (1) network egress is unrestricted, which is great
+  for real tasks and worth documenting; (2) a proper browser (Chromium) would
+  make the "no app installed" fallback path far more useful than the test
+  shell.
 - **Idle disconnect never happened.** Three runs with 10–30 s gaps between
   ops, no 409s, no session drops. Good.
 - **`apps.launch` first call took 5.3 s** (cold app start), later ones 2.5 s.
