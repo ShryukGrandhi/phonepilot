@@ -8,3 +8,5 @@ runs/
 dist/
 .coverage
 htmlcov/
+logs/
+shot.png
