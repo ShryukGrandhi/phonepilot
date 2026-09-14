@@ -129,6 +129,19 @@ Session `5d7008187bb9` (1200 s, three tasks back to back, Gemini 2.5 Flash):
   The op blocks until Android confirms the launch, which is exactly the right
   behaviour for an agent; just noting the number.
 
+## Dashboard
+
+- Sign-in state carried over ("Checking your sign-in…" → workspace) and the
+  balance in the header matched `/me` to the cent. Sessions → Past lists each
+  session with ready duration, end reason and charge, plus an Export CSV. That
+  is exactly the audit trail I wanted after a day of agent runs: the three-task
+  dev session shows `6m 45s · Ended by request · $2.45`.
+- Sessions started from the API show up in the dashboard within a few seconds
+  as `Starting`, then `Ready`, with an `Open` action that lands on the live
+  viewer. Nice for watching an agent run without writing any viewer code.
+- Small thing: the Active tab has no auto-refresh; I hit Refresh to see the
+  state flip. A 5 s poll while a session is `Starting` would feel better.
+
 ## Things I'd ask for, ranked
 
 1. A pooled/prepared start for beta accounts. 137 s cold start × every task
