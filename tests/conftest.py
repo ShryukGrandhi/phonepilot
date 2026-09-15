@@ -40,6 +40,8 @@ class FakePhone:
     app: str | None = "app.lawnchair"
     fail_next_op: dict | None = None
     sid: str = "fake123"
+    fail_create: str | None = None  # when set, POST /sessions answers 409 with this message (provider full)
+    fail_provision: str | None = None  # when set, a created session goes provisioning -> error with this message
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
@@ -48,9 +50,14 @@ class FakePhone:
         if path == "/me":
             return httpx.Response(200, json={"balance_cents": 1000, "price_cents_per_minute": 35})
         if path == "/sessions" and method == "POST":
-            self.state = "provisioning" if self.polls_until_ready else "ready"
+            if self.fail_create:
+                return httpx.Response(409, json={"error": self.fail_create})
+            self.state = "provisioning" if (self.polls_until_ready or self.fail_provision) else "ready"
             return httpx.Response(202, json=self._session())
         if path == f"/sessions/{self.sid}" and method == "GET":
+            if self.fail_provision and self.state == "provisioning":
+                self.state = "error"
+                return httpx.Response(200, json={**self._session(), "error": self.fail_provision})
             if self.polls_until_ready > 0:
                 self.polls_until_ready -= 1
                 if self.polls_until_ready == 0:

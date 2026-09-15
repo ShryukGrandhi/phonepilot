@@ -43,7 +43,13 @@ def acquire(
     key = new_idempotency_key()
     s = client.create_session(timeout_seconds=timeout_seconds, idempotency_key=key)
     log(f"created session {s.id} (timeout {timeout_seconds}s, idempotency key {key}); provisioning…")
-    s = client.wait_ready(s.id, PROVISION_WAIT_S, on_poll=_progress(log))
+    try:
+        s = client.wait_ready(s.id, PROVISION_WAIT_S, on_poll=_progress(log))
+    except Exception:
+        # a session that errored or timed out while provisioning is still ours: delete it rather than
+        # leave it in the account's list (seen live: state=error sat there with its timeout still counting)
+        release(client, s.id, log)
+        raise
     wait = time.monotonic() - t0
     log(f"session {s.id} ready after {wait:.0f}s: screen {s.screen}, {len(s.ops)} ops")
     return Lease(s, created_here=True, ready_wait_s=wait)

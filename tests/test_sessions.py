@@ -52,3 +52,20 @@ def test_acquire_propagates_provisioning_error(client, phone):
     phone.state = "error"
     with pytest.raises(ProvisioningFailed):
         acquire(client, "fake123", 600, lambda m: None)
+
+
+def test_acquire_deletes_a_created_session_that_fails_to_provision(client, phone):
+    """Seen live: a fresh session went provisioning -> error and sat in the account list. We must DELETE it."""
+    phone.fail_provision = "provider could not boot the device"
+    logs: list[str] = []
+    with pytest.raises(ProvisioningFailed):
+        acquire(client, None, 600, logs.append)
+    assert phone.state == "closing", "the errored session was released"
+    assert any("released" in m or "closing" in m for m in logs)
+
+
+def test_acquire_does_not_delete_a_foreign_session_that_is_in_error(client, phone):
+    phone.state = "error"
+    with pytest.raises(ProvisioningFailed):
+        acquire(client, "fake123", 600, lambda m: None)
+    assert phone.state == "error", "not created here -> not ours to delete"

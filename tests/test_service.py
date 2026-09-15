@@ -366,3 +366,26 @@ def test_events_since_polling_fallback(service):
     st, j = a.js("GET", f"/api/events/since?after={t}")
     assert [e["text"] for e in j["events"]] == ["two"]
     assert a.call("GET", "/api/events/since?after=0", csrf=False)[0] == 200
+
+
+def test_failed_phone_start_tears_the_sandbox_down(service):
+    """Provider says 'all phones in use': the slot returns to no_phone with the reason and its sandbox is gone at once."""
+    svc, port, phones = service
+    a = Browser(port)
+    a.js("POST", "/api/auth/signup", {"email": "a@x.io", "password": "correct horse battery"})
+    a.js("POST", "/api/keys", {"provider": "phone_harness", "value": "pck_userA_key_000000000000"})
+    a.js("POST", "/api/keys", {"provider": "gemini", "value": "AIzaSy_user_A_model_key_000000"})
+    phones.a.fail_create = "All phones are in use right now. Try again in a few minutes."
+
+    assert a.js("POST", "/api/session/start", {"timeout_seconds": 600})[0] == 200
+    rt = svc.registry.get(svc.store.user_by_email("a@x.io")[0]).phones["phone1"]
+    assert wait_for(lambda: rt.status == "no_phone" and rt.last_error is not None, timeout=10)
+    assert "All phones are in use" in rt.last_error
+    assert wait_for(lambda: rt.sandbox is None, timeout=10), "no phone -> no sandbox, without waiting for the idle reaper"
+    st, j = a.js("GET", "/api/state")
+    assert j["phones"]["phone1"]["status"] == "no_phone" and "All phones are in use" in j["phones"]["phone1"]["last_error"]
+
+    # and the slot is immediately usable again once the provider has room
+    phones.a.fail_create = None
+    assert a.js("POST", "/api/session/start", {"timeout_seconds": 600})[0] == 200
+    assert wait_for(lambda: rt.status == "ready", timeout=10) and rt.sandbox is not None

@@ -239,6 +239,10 @@ class PhoneRuntime:
                 if kind == "log" and str(event.get("text", "")).startswith("phone failed to start"):
                     self.last_error = str(event["text"])
                     self._start_pending = False
+                    self.status = "no_phone"
+                    self._push_state()
+                    threading.Thread(target=self._stop_sandbox, daemon=True).start()  # no phone -> no sandbox
+                    continue
                 if kind == "task":
                     self.run_id = None
                     continue  # the user-level run_task() already announced it; avoid a duplicate bubble
@@ -321,6 +325,7 @@ class PhoneRuntime:
             self._start_pending = False
             self.status = "no_phone"
             self._push_state()
+            self._stop_sandbox()  # a sandbox with no phone has nothing to do; do not wait for the idle reaper
 
     def end_session(self) -> None:
         with self.lock:

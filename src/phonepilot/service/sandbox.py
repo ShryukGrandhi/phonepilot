@@ -138,7 +138,7 @@ class DockerBackend:
         for cid in stale:
             self.log(f"reaping stale sandbox container {cid[:12]}")
             subprocess.run(["docker", "stop", "-t", "120", cid], capture_output=True, timeout=180)
-            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=60)
+            subprocess.run(["docker", "rm", "-fv", cid], capture_output=True, timeout=60)
 
     @staticmethod
     def available() -> bool:
@@ -154,6 +154,7 @@ class DockerBackend:
         cmd = [
             "docker", "run", "-d", "--name", name, "--no-healthcheck", "--label", "phonepilot.sandbox=1", "--label", f"phonepilot.owner={os.getpid()}",
             "--read-only", "--tmpfs", "/tmp:rw,size=256m", "--tmpfs", "/home/phonepilot/.android:rw,size=1m",
+            "--tmpfs", "/data:rw,size=1m",  # the image declares VOLUME /data for the web tier; a sandbox must not leave an anonymous volume behind
             "--memory", "768m", "--cpus", "1", "--pids-limit", "256",
             "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
             "-p", f"127.0.0.1:{port}:{SANDBOX_PORT}",
@@ -183,7 +184,7 @@ class DockerBackend:
         deadline = time.monotonic() + STOP_GRACE_S
         while time.monotonic() < deadline and self.alive(sb):
             time.sleep(1.0)
-        subprocess.run(["docker", "rm", "-f", sb.handle], capture_output=True, timeout=60)
+        subprocess.run(["docker", "rm", "-fv", sb.handle], capture_output=True, timeout=60)
 
     def alive(self, sb: Sandbox) -> bool:
         r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", sb.handle], capture_output=True, text=True, timeout=20)
