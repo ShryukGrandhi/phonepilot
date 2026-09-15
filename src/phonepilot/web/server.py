@@ -38,6 +38,11 @@ SSE_KEEPALIVE_S = 15.0
 EVENT_HISTORY = 300
 
 
+def sse_chunk(payload: bytes) -> bytes:
+    """One HTTP/1.1 chunk. Event streams must be chunk-framed, or proxies (Cloudflare, Vercel) buffer them to EOF."""
+    return f"{len(payload):x}\r\n".encode("ascii") + payload + b"\r\n"
+
+
 class Hub:
     """Fan-out of JSON events to every connected browser tab."""
 
@@ -364,6 +369,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         q = self.app.hub.subscribe()
         try:
@@ -372,7 +379,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     event = q.get(timeout=SSE_KEEPALIVE_S)
                 except queue.Empty:
-                    self.wfile.write(b": ping\n\n")
+                    self.wfile.write(sse_chunk(b": ping\n\n"))
                     self.wfile.flush()
                     continue
                 self._sse_write(event)
@@ -382,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
             self.app.hub.unsubscribe(q)
 
     def _sse_write(self, event: dict[str, Any]) -> None:
-        self.wfile.write(b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n\n")
+        self.wfile.write(sse_chunk(b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n\n"))
         self.wfile.flush()
 
     # ---------------------------------------------------------------- POST

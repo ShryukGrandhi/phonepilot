@@ -342,7 +342,7 @@ def test_stream_token_opens_events_without_cookie(service):
     conn.request("GET", f"/api/events?t={j['token']}")   # no cookie at all
     resp = conn.getresponse()
     assert resp.status == 200 and resp.getheader("Content-Type") == "text/event-stream"
-    hello = json.loads(resp.fp.readline()[6:])
+    hello = json.loads(resp.readline()[6:])
     assert hello["kind"] == "hello" and hello["state"]["user"]["email"] == "a@x.io"
     conn.close()
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)

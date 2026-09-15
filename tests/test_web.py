@@ -114,12 +114,12 @@ def test_sse_stream_sends_hello_then_events(web):
     conn.request("GET", "/api/events")
     resp = conn.getresponse()
     assert resp.getheader("Content-Type") == "text/event-stream"
-    first = resp.fp.readline()
+    first = resp.readline()
     assert first.startswith(b"data: ")
     hello = json.loads(first[6:])
     assert hello["kind"] == "hello" and hello["state"]["status"] == "no_phone"
-    resp.fp.readline()  # blank line terminating the event
+    resp.readline()  # blank line terminating the event
     app.hub.publish("log", text="ping from test")
-    line = resp.fp.readline()
+    line = resp.readline()
     assert json.loads(line[6:])["text"] == "ping from test"
     conn.close()

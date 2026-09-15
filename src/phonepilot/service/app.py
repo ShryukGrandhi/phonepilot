@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..cloud import CloudError
+from ..web.server import sse_chunk
 from .auth import Auth, AuthError, clear_cookie_header, cookie_header, COOKIE_NAME
 import os
 from .runtime import ConfigError, KeyResolver, Limits, Pool, QuotaError, Registry, UserRuntime
@@ -244,6 +245,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("X-Accel-Buffering", "no")
         for k, v in SECURITY_HEADERS.items():
             self.send_header(k, v)
         for k, v in self._cors_headers().items():
@@ -256,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     event = q.get(timeout=SSE_KEEPALIVE_S)
                 except queue.Empty:
-                    self.wfile.write(b": ping\n\n")
+                    self.wfile.write(sse_chunk(b": ping\n\n"))
                     self.wfile.flush()
                     continue
                 self._sse_write(event)
@@ -266,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             rt.hub.unsubscribe(q)
 
     def _sse_write(self, event: dict[str, Any]) -> None:
-        self.wfile.write(b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n\n")
+        self.wfile.write(sse_chunk(b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n\n"))
         self.wfile.flush()
 
     # ---------------------------------------------------------------- POST
