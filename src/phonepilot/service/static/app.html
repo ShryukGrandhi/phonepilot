@@ -126,6 +126,7 @@
 </main>
 <div id="lightbox" onclick="this.style.display='none'"><img id="lightbox-img" alt=""></div>
 
+<script src="/config.js"></script>
 <script>
 const API = window.PHONEPILOT_API || '';
 const $ = id => document.getElementById(id);
@@ -136,8 +137,18 @@ const lastMarked = {};   // slot -> url
 const frameTimers = {};  // slot -> timeout
 
 // ------------------------------------------------------------- events
-function connect(){
-  const es = new EventSource(API + '/api/events', {withCredentials:true});
+async function connect(){
+  // The page may be served by a proxy that buffers SSE (Vercel); if the backend advertises a
+  // direct stream base, mint a one-time token over the cookie-authenticated API and connect there.
+  let url = API + '/api/events';
+  try {
+    const r = await fetch(API + '/api/events/token', {credentials:'include'});
+    if (r.status === 401){ location.href = '/login'; return; }
+    const j = await r.json();
+    const base = j.stream_base || window.PHONEPILOT_STREAM || '';
+    if (base) url = base.replace(/\/$/, '') + '/api/events?t=' + encodeURIComponent(j.token);
+  } catch (e) { /* fall back to same-origin */ }
+  const es = new EventSource(url);
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
     if (ev.kind === 'hello'){ $('log').innerHTML=''; ev.history.forEach(render); applyState(ev.state); return; }

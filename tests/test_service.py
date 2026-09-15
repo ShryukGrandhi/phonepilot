@@ -330,3 +330,24 @@ def test_route_task_parser():
     assert route_task("plain", "both", S) == (S, "plain")
     with pytest.raises(ValueError):
         route_task("@3 nope", None, S)
+
+
+def test_stream_token_opens_events_without_cookie(service):
+    svc, port, phones = service
+    a = Browser(port)
+    a.js("POST", "/api/auth/signup", {"email": "a@x.io", "password": "correct horse battery"})
+    st, j = a.js("GET", "/api/events/token")
+    assert st == 200 and len(j["token"]) > 20
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", f"/api/events?t={j['token']}")   # no cookie at all
+    resp = conn.getresponse()
+    assert resp.status == 200 and resp.getheader("Content-Type") == "text/event-stream"
+    hello = json.loads(resp.fp.readline()[6:])
+    assert hello["kind"] == "hello" and hello["state"]["user"]["email"] == "a@x.io"
+    conn.close()
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", f"/api/events?t={j['token']}")   # single use
+    assert conn.getresponse().status == 401
+    conn.close()
+    st, _, body = a.call("GET", "/config.js")
+    assert st == 200 and b"PHONEPILOT_STREAM" in body

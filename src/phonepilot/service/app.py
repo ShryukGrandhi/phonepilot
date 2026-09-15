@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import queue
+import secrets
 import threading
 import time
 from http import HTTPStatus
@@ -32,6 +33,7 @@ STATIC = Path(__file__).with_name("static")
 MAX_BODY = 64 * 1024
 SSE_KEEPALIVE_S = 15.0
 CSRF_HEADER = "X-PhonePilot"
+STREAM_TOKEN_TTL_S = 60.0
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
                                "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
@@ -61,6 +63,29 @@ class Service:
         self.secure_cookies = secure_cookies
         self.trust_proxy = trust_proxy
         self.log = log
+        self.stream_base = os.environ.get("PHONEPILOT_STREAM_BASE", "")
+        self._stream_tokens: dict[str, tuple[str, float]] = {}
+        self._stream_lock = threading.Lock()
+
+    # Short-lived tokens let the browser open the event stream directly against this
+    # server when the page is served from elsewhere (e.g. Vercel, whose rewrite proxy
+    # buffers SSE). Cookie auth mints the token; the stream URL carries it.
+    def mint_stream_token(self, user_id: str) -> str:
+        token = secrets.token_urlsafe(24)
+        with self._stream_lock:
+            now = time.time()
+            self._stream_tokens = {t: v for t, v in self._stream_tokens.items() if v[1] > now}
+            self._stream_tokens[token] = (user_id, now + STREAM_TOKEN_TTL_S)
+        return token
+
+    def redeem_stream_token(self, token: str | None) -> User | None:
+        if not token:
+            return None
+        with self._stream_lock:
+            entry = self._stream_tokens.pop(token, None)
+        if not entry or entry[1] < time.time():
+            return None
+        return self.store.user_by_id(entry[0])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -164,11 +189,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._static("login.html")
         if path == "/healthz":
             return self._json(200, {"ok": True})
+        if path == "/config.js":
+            js = 'window.PHONEPILOT_STREAM = ' + json.dumps(self.svc.stream_base) + ';
+'
+            return self._send(200, js.encode("utf-8"), "application/javascript", {"Cache-Control": "no-store"})
+        if path == "/api/events":
+            token = self._query().get("t")
+            if token:
+                user = self.svc.redeem_stream_token(token)
+                if user is None:
+                    return self._json(401, {"error": "bad or expired stream token"})
+                return self._sse(self.svc.registry.get(user))
         rt = self._runtime()
         if rt is None:
             if path == "/":
                 return self._redirect("/login")
             return self._json(401, {"error": "sign in required"})
+        if path == "/api/events/token":
+            return self._json(200, {"token": self.svc.mint_stream_token(rt.user.id), "stream_base": self.svc.stream_base})
         if path == "/":
             return self._static("app.html")
         if path == "/api/state":
@@ -208,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
         for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, v)
+        for k, v in self._cors_headers().items():
             self.send_header(k, v)
         self.end_headers()
         q = rt.hub.subscribe()

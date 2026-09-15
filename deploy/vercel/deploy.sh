@@ -10,6 +10,8 @@ BACKEND_URL="${BACKEND_URL%/}"
 mkdir -p public
 cp ../../src/phonepilot/service/static/app.html public/index.html
 cp ../../src/phonepilot/service/static/login.html public/login.html
+printf 'window.PHONEPILOT_STREAM = "%s";
+' "$BACKEND_URL" > public/config.js
 cat > vercel.json <<JSON
 {
   "\$schema": "https://openapi.vercel.sh/vercel.json",
