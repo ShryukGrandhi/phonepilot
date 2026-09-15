@@ -207,6 +207,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(401, {"error": "sign in required"})
         if path == "/api/events/token":
             return self._json(200, {"token": self.svc.mint_stream_token(rt.user.id), "stream_base": self.svc.stream_base})
+        if path == "/api/events/since":
+            # polling fallback for proxies that buffer SSE: events newer than `after` (unix seconds)
+            try:
+                after = float(self._query().get("after") or 0)
+            except ValueError:
+                after = 0.0
+            events = [e for e in list(rt.hub.history) if e.get("t", 0) > after]
+            return self._json(200, {"events": events, "now": time.time(), "state": rt.state()})
         if path == "/":
             return self._static("app.html")
         if path == "/api/state":

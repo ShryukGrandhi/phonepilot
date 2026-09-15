@@ -351,3 +351,18 @@ def test_stream_token_opens_events_without_cookie(service):
     conn.close()
     st, _, body = a.call("GET", "/config.js")
     assert st == 200 and b"PHONEPILOT_STREAM" in body
+
+
+def test_events_since_polling_fallback(service):
+    svc, port, phones = service
+    a = Browser(port)
+    a.js("POST", "/api/auth/signup", {"email": "a@x.io", "password": "correct horse battery"})
+    ua = svc.registry.get(svc.store.user_by_email("a@x.io")[0])
+    ua.hub.publish("log", text="one")
+    st, j = a.js("GET", "/api/events/since?after=0")
+    assert st == 200 and [e["text"] for e in j["events"] if e["kind"] == "log"] == ["one"] and j["state"]["user"]["email"] == "a@x.io"
+    t = j["now"]
+    ua.hub.publish("log", text="two")
+    st, j = a.js("GET", f"/api/events/since?after={t}")
+    assert [e["text"] for e in j["events"]] == ["two"]
+    assert a.call("GET", "/api/events/since?after=0", csrf=False)[0] == 200

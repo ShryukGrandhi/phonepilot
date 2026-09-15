@@ -149,14 +149,37 @@ async function connect(){
     if (base) url = base.replace(/\/$/, '') + '/api/events?t=' + encodeURIComponent(j.token);
   } catch (e) { /* fall back to same-origin */ }
   const es = new EventSource(url);
+  let gotHello = false;
+  const helloTimer = setTimeout(() => { if (!gotHello){ es.close(); startPolling(); } }, 4000);  // proxy buffering SSE? poll instead
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
-    if (ev.kind === 'hello'){ $('log').innerHTML=''; ev.history.forEach(render); applyState(ev.state); return; }
-    if (ev.kind === 'state'){ applyState(ev); return; }
-    if (ev.kind === 'phone_state'){ if (state.phones){ state.phones[ev.phone] = ev; renderPhones(); updateComposer(); } return; }
-    render(ev);
+    if (ev.kind === 'hello'){ gotHello = true; clearTimeout(helloTimer); $('log').innerHTML=''; ev.history.forEach(render); applyState(ev.state); return; }
+    handleEvent(ev);
   };
-  es.onerror = () => { fetch(API+'/api/state',{credentials:'include'}).then(r=>{ if (r.status===401) location.href='/login'; }); setTimeout(()=>{ es.close(); connect(); }, 2000); };
+  es.onerror = () => { if (polling) return; fetch(API+'/api/state',{credentials:'include'}).then(r=>{ if (r.status===401) location.href='/login'; }); setTimeout(()=>{ es.close(); if (!polling) connect(); }, 2000); };
+}
+function handleEvent(ev){
+  if (ev.kind === 'state'){ applyState(ev); return; }
+  if (ev.kind === 'phone_state'){ if (state.phones){ state.phones[ev.phone] = ev; renderPhones(); updateComposer(); } return; }
+  render(ev);
+}
+let polling = false, lastT = 0;
+async function startPolling(){
+  if (polling) return;
+  polling = true;
+  render({kind:'log', text:'live stream unavailable through this host; polling every 1.5s'});
+  let first = true;
+  while (polling){
+    try {
+      const r = await fetch(API + '/api/events/since?after=' + lastT, {credentials:'include'});
+      if (r.status === 401){ location.href = '/login'; return; }
+      const j = await r.json();
+      if (first){ $('log').innerHTML=''; first = false; }
+      for (const ev of j.events){ handleEvent(ev); if (ev.t > lastT) lastT = ev.t; }
+      applyState(j.state);
+    } catch (e) { /* transient */ }
+    await new Promise(res => setTimeout(res, 1500));
+  }
 }
 function applyState(s){
   state = s;
