@@ -21,11 +21,14 @@ built on the development machine, which had no Docker daemon running; the
 non-Docker path below is what was exercised.)
 
 On an always-on Mac (Mac Studio / mini), `deploy/mac/install.sh` installs
-uv, adb and cloudflared with Homebrew, registers two launchd agents
-(`phonepilot serve` on 127.0.0.1:8080 and a Cloudflare quick tunnel that
-publishes it at a random `https://…trycloudflare.com` URL), and prints the
-URL. Written against the launchd/Homebrew conventions; not yet executed on a
-Mac from this project.
+uv + Python 3.13 and adb user-locally (no Homebrew, no sudo), clones the
+repo, writes `.env`, and registers a launchd agent for `phonepilot serve` on
+127.0.0.1:8080. `deploy/mac/expose.sh` then publishes it: Tailscale Funnel
+(stable URL) if the tailnet allows it, otherwise a Cloudflare quick tunnel
+(random `https://…trycloudflare.com` URL, changes on restart). Both scripts
+were run on a Mac Studio on 2026-09-14; the Vercel frontend
+(`deploy/vercel/deploy.sh`) proxies `/api`, `/runs` and `/healthz` to that
+URL.
 
 Without Docker:
 
@@ -52,15 +55,18 @@ take precedence when present. Pooled mode is where the quotas matter:
 
 | env | default | meaning |
 |---|---|---|
-| `PHONEPILOT_MAX_PHONES_PER_USER` | 1 | concurrent phones per account |
+| `PHONEPILOT_MAX_PHONES_PER_USER` | 2 | phone slots per account (Phone 1, Phone 2, …) |
 | `PHONEPILOT_DAILY_PHONE_MINUTES` | 90 | ready-time per user per rolling 24 h |
 | `PHONEPILOT_MAX_STEPS` | 25 | agent steps per task |
 | `PHONEPILOT_MAX_SESSION_TIMEOUT` | 1800 | longest phone lifetime a user may request |
-| `PHONEPILOT_TRANSPORT` | http | `adb` to drive phones over adb (needs adb in the image; it is) |
+| `PHONEPILOT_TRANSPORT` | adb | `http` selects the legacy `/op` vocabulary (being retired) |
 
 Phone Harness itself caps sessions per account (6 on the beta account I
-used), so pooled mode with more than a handful of simultaneous users needs
-either more accounts or a queue.
+used), so pooled mode supports at most three people with two phones each at
+once; more needs users' own keys, more accounts, or a queue. Provisioning can
+also fail on the provider side (`state: error`, or `409 at capacity` while
+recently ended phones clean up); the UI shows the reason on that slot and
+Start can simply be retried.
 
 ## 3. One sandbox per phone session
 
