@@ -307,8 +307,8 @@ def _parser() -> argparse.ArgumentParser:
         sp.add_argument("--model", default=None)
         sp.add_argument("--max-steps", type=int, default=25)
         sp.add_argument("--runs-dir", default="runs")
-        sp.add_argument("--transport", choices=["http", "adb"], default=os.environ.get("PHONEPILOT_TRANSPORT", "http"),
-                        help="how to drive the phone: Cloud API ops (http) or stock adb via the /adb endpoint")
+        sp.add_argument("--transport", choices=["adb", "http"], default=os.environ.get("PHONEPILOT_TRANSPORT", "adb"),
+                        help="how to drive the phone: stock adb via the /adb endpoint (default) or the legacy Cloud API /op vocabulary")
 
     def session_opts(sp):
         sp.add_argument("--session", "-s", default=None, help="reuse an existing ready session id")

@@ -300,6 +300,12 @@ class AppState:
     def frame(self) -> bytes:
         if not self.session or self.status in ("no_phone", "starting", "ending"):
             raise LookupError("no ready phone")
+        if getattr(self.device, "transport", "http") == "adb":
+            import io
+
+            buf = io.BytesIO()
+            self.device.screenshot().save(buf, format="PNG")
+            return buf.getvalue()
         return self.client.snapshot(self.session.id)
 
 

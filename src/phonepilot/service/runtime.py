@@ -53,7 +53,7 @@ class Limits:
     max_steps: int = int(os.environ.get("PHONEPILOT_MAX_STEPS", "25"))
     max_session_timeout_s: int = int(os.environ.get("PHONEPILOT_MAX_SESSION_TIMEOUT", "1800"))
     default_session_timeout_s: int = int(os.environ.get("PHONEPILOT_DEFAULT_SESSION_TIMEOUT", "900"))
-    transport: str = os.environ.get("PHONEPILOT_TRANSPORT", "http")
+    transport: str = os.environ.get("PHONEPILOT_TRANSPORT", "adb")
 
     def slots(self) -> tuple[str, ...]:
         return tuple(f"phone{i}" for i in range(1, max(1, self.max_phones_per_user) + 1))

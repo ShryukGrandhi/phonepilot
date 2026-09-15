@@ -91,8 +91,11 @@ phonepilot serve --port 8080 --data ./data       # or: docker compose up -d --bu
 
 Same page as `web`, plus accounts. Invite-only signup (first account is
 admin), each user pastes their own Phone Harness + model keys in Settings
-(encrypted at rest, never shown again), and gets their own phone, event
-stream, run history and quotas. **Every phone session runs in its own
+(encrypted at rest, never shown again), and gets **two phone slots** ("Phone
+1", "Phone 2"), one event stream, run history and quotas. One chat box drives
+both: pick a target (Phone 1 / Phone 2 / Both) or prefix the message with
+`@1`, `@2`, `@both`; each phone has its own live view, Start/End, and its
+steps are badged in the log. **Every phone session runs in its own
 sandbox** — a Docker container when a daemon is available, otherwise a
 separate process — holding only that user's keys, its own adb identity and
 its own runs folder; the web tier just proxies to it with a per-sandbox
