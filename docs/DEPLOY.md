@@ -30,6 +30,13 @@ were run on a Mac Studio on 2026-09-14; the Vercel frontend
 (`deploy/vercel/deploy.sh`) proxies `/api`, `/runs` and `/healthz` to that
 URL.
 
+For containers on that Mac without admin rights, `deploy/mac/docker.sh`
+installs Lima + Colima + the Docker CLI under `~/.local`, boots one Linux VM
+(Apple Virtualization, 4 CPU / 8 GB) with a launchd agent, builds the image
+inside it, and switches `.env` to `PHONEPILOT_SANDBOX=docker`. Every phone
+session then runs in its own container inside that VM; the web tier stays a
+macOS process. Done on the Mac Studio on 2026-09-14.
+
 Without Docker:
 
 ```bash
