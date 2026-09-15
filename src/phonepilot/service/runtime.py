@@ -241,6 +241,7 @@ class PhoneRuntime:
                     self._start_pending = False
                 if kind == "task":
                     self.run_id = None
+                    continue  # the user-level run_task() already announced it; avoid a duplicate bubble
                 if kind == "step":
                     for key in ("marked_url", "shot_url"):
                         if event.get(key, "").startswith("/runs/"):

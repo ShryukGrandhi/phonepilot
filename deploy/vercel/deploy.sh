@@ -32,3 +32,5 @@ cat > vercel.json <<JSON
 JSON
 echo "backend: $BACKEND_URL"
 vercel deploy --yes "$@"
+# `vercel deploy --prod` does not always move the project alias; pin it explicitly
+URL=$(vercel ls phonepilot --prod 2>/dev/null | grep -o "https://[^ ]*" | head -1); [ -n "$URL" ] && vercel alias set "$URL" phonepilot-shryukgrandhis-projects.vercel.app >/dev/null && vercel alias set "$URL" phonepilot-two.vercel.app >/dev/null && echo "aliased: https://phonepilot-two.vercel.app"
