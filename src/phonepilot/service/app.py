@@ -190,8 +190,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             return self._json(200, {"ok": True})
         if path == "/config.js":
-            js = 'window.PHONEPILOT_STREAM = ' + json.dumps(self.svc.stream_base) + ';
-'
+            js = "window.PHONEPILOT_STREAM = " + json.dumps(self.svc.stream_base) + ";" + chr(10)
             return self._send(200, js.encode("utf-8"), "application/javascript", {"Cache-Control": "no-store"})
         if path == "/api/events":
             token = self._query().get("t")
