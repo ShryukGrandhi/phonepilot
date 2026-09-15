@@ -216,10 +216,15 @@ def main() -> int:
     check("unauthenticated frame -> 401", Client(args.base).call("GET", "/api/frame.png?phone=phone1")[0] == 401)
     check("garbage cookie -> 401", Client(args.base).call("GET", "/api/state", cookie="deadbeef" * 8)[0] == 401)
     check("POST without CSRF header -> 403", a.call("POST", "/api/task", {"task": "x"}, csrf=False)[0] == 403)
-    st, _, _ = b.call("POST", "/api/session/attach", {"session_id": a_sid, "phone": "phone2"})
-    check("B attaching A's session id -> 403", st == 403, f"got {st}")
-    st, _, _ = b.call("POST", "/api/session/attach", {"session_id": "000000000000", "phone": "phone2"})
-    check("attaching an unknown session id -> 403/404", st in (403, 404), f"got {st}")
+    st, jb = b.js("POST", "/api/session/attach", {"session_id": a_sid, "phone": "phone2"})
+    # security property: A's phone is not attachable by B. The attach must be REJECTED (never 200) and B must
+    # not end up owning A's session. (Edge proxies can rewrite the exact 4xx; the app itself answers 403.)
+    b_after = b.phones().get("phone2", {})
+    check("B cannot attach A's session id (rejected, no ownership gained)",
+          st != 200 and b_after.get("session_id") != a_sid and b_after.get("status") in (None, "no_phone"),
+          f"got {st} {jb.get('error', '')}")
+    st, jb = b.js("POST", "/api/session/attach", {"session_id": "000000000000", "phone": "phone2"})
+    check("attaching an unknown session id is rejected", st != 200, f"got {st} {jb.get('error', '')}")
     check("B's state never mentions A's session id", bool(a_sid) and a_sid not in json.dumps(sb), a_sid or "no sid")
     st, j = a.js("GET", "/api/events/since?after=0")
     a_events = j.get("events", [])
@@ -280,8 +285,13 @@ def main() -> int:
             env1 = ssh_out(args.ssh, f"{dk} docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {c1}")
             env2 = ssh_out(args.ssh, f"{dk} docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {c2}")
             tok2 = next((line.split("=", 1)[1] for line in env2.splitlines() if line.startswith("PHONEPILOT_SANDBOX_TOKEN=")), "")
-            check("container env has no master key / pool vars / db path",
-                  all(k not in env1 for k in ("PHONEPILOT_MASTER_KEY", "PHONEPILOT_POOL_", "PHONEPILOT_DATA")))
+            secrets_on_host = ssh_out(args.ssh, "grep -E '^(PHONEPILOT_MASTER_KEY|PHONEPILOT_POOL_)' ~/phonepilot/.env | cut -d= -f2-").split()
+            no_master_name = "PHONEPILOT_MASTER_KEY=" not in env1 and "PHONEPILOT_POOL_" not in env1
+            no_secret_value = all(v and v not in env1 for v in secrets_on_host) if secrets_on_host else True
+            data_is_tmpfs = "PHONEPILOT_DATA=/data" in env1  # in-container tmpfs, not the host data dir
+            check("container env carries no master key, no pool var, no secret value; only /data path",
+                  no_master_name and no_secret_value and data_is_tmpfs,
+                  "master-name-absent=%s secret-values-absent=%s data=/data=%s" % (no_master_name, no_secret_value, data_is_tmpfs))
             check("sandbox bearer tokens differ per container", bool(tok2) and tok2 not in env1)
             m1 = ssh_out(args.ssh, f"{dk} docker inspect -f '{{{{range .Mounts}}}}{{{{.Source}}}}|{{{{end}}}}' {c1}").strip("|").split("|")
             m2 = ssh_out(args.ssh, f"{dk} docker inspect -f '{{{{range .Mounts}}}}{{{{.Source}}}}|{{{{end}}}}' {c2}").strip("|").split("|")

@@ -68,12 +68,33 @@ take precedence when present. Pooled mode is where the quotas matter:
 | `PHONEPILOT_MAX_SESSION_TIMEOUT` | 1800 | longest phone lifetime a user may request |
 | `PHONEPILOT_TRANSPORT` | adb | `http` selects the legacy `/op` vocabulary (being retired) |
 
-Phone Harness itself caps sessions per account (6 on the beta account I
-used), so pooled mode supports at most three people with two phones each at
-once; more needs users' own keys, more accounts, or a queue. Provisioning can
-also fail on the provider side (`state: error`, or `409 at capacity` while
-recently ended phones clean up); the UI shows the reason on that slot and
-Start can simply be retried.
+Phone Harness caps concurrent sessions per account. That cap moved during the
+beta (my key reported `session_limit: 6` in the morning and `session_limit: 2`
+by evening on 2026-09-14), so treat it as small and changeable, and read it
+from `/me` rather than hard-coding it.
+
+**How the shared cap is allocated: it isn't.** PhonePilot does not arbitrate
+between users for provider slots. The per-user quota
+(`PHONEPILOT_MAX_PHONES_PER_USER`) is enforced locally, but every "Start phone"
+then fires `POST /sessions` straight at the provider. The provider grants
+sessions first-come-first-served until it is full and answers
+`409 All phones are in use right now` to everyone after — surfaced verbatim on
+that user's slot. No queue, no reservation, no fairness, no auto-retry: whoever's
+create request lands first while a slot is free wins, the rest get the 409 and
+can press Start again. With the cap at 2 this is effectively two phones for the
+whole pooled account, handed out by race. Fine for a demo or a couple of people;
+under real contention a user can be starved indefinitely.
+
+The fixes, none built yet: a **warm pool + FIFO queue** (pre-provision the N the
+account allows, hand a ready phone to the next waiter, show queue position — also
+hides the ~140 s cold start); **bring-your-own keys** (each user's own Phone
+Harness account, so caps never collide — the resolver already prefers a user's
+own key over the pool); or **per-user reservation** (split the cap into
+guaranteed slots so nobody is fully starved). Provisioning can also fail on the
+provider side (`state: error`, or `409 at capacity` while recently ended phones
+clean up); the slot shows the reason and a failed start now tears its sandbox
+down at once (rather than after the idle timeout) and deletes any session it
+created that never reached `ready`.
 
 ## 3. One sandbox per phone session
 

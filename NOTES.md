@@ -90,6 +90,26 @@ directly; numbers are from my own sessions, not marketing.
   "Start phone" can fail for reasons unrelated to the user; I now surface the
   message verbatim. Request: a `Retry-After` header on that 409, and either a
   faster cleanup path or `available_session_slots` that accounts for it.
+- **The per-account session cap changed from 6 to 2 during the day, silently.**
+  `/me` reported `session_limit: 6` at 13:00 PT and `session_limit: 2` at
+  18:20 PT on 2026-09-14 (same key, `default_provider: shlut`). Nothing in the
+  API announces a change like that; a service that planned "three people, two
+  phones each" on the morning number simply starts failing. Over the cap,
+  `POST /sessions` answers `409 All phones are in use right now. Try again in
+  a few minutes.` (no `Retry-After`, and the message reads like a fleet-wide
+  condition rather than "your account is at its limit", which it was).
+  Request: document the cap, expose it and its changes, and distinguish
+  "your limit" from "provider full" in the 409.
+- **A session that fails while provisioning stays in the list.** One of six
+  concurrent creates went `provisioning → error` (my client saw the
+  transitional `closing` state) and then sat in `GET /sessions` as
+  `state: error` with its `timeout_seconds` still counting down for 10+
+  minutes. It was *not* billed (balance moved exactly by the one live phone)
+  and not counted in `active_session_count`, and `DELETE` on it answered
+  `released`, so nothing is lost; but a client that only lists sessions
+  cannot tell an errored ghost from a live phone without reading `state`.
+  I now DELETE any session I created that fails to reach `ready`. Request:
+  auto-close errored sessions, or at least stop the countdown.
 - **The ADB endpoint changed shape three times in one day** (which is great
   responsiveness, and also exactly what breaks clients):
   1. morning docs: ssh-ed25519 key → SSH tunnel;

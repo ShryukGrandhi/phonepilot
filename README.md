@@ -315,6 +315,12 @@ plumbing and image pruning). Live runs against the real API are what the
   nodes; the agent falls back to `tap_xy` from the screenshot, which is less
   reliable.
 - One task at a time per phone. Ops are serialized per phone by the service.
+- **Pooled mode shares one account's small session cap (2 right now) with no
+  arbitration.** Starts race for provider slots first-come-first-served; losers
+  get a `409` on that slot and retry manually. See `docs/DEPLOY.md` for the
+  warm-pool/queue, bring-your-own-key, and reservation fixes. Verified with a
+  3-user × 2-phone leak run (`scripts/multiuser_smoke.py`): full cross-user
+  isolation held; the cap simply meant only two phones booted and the rest 409'd.
 
 ## License
 
