@@ -5,7 +5,7 @@
 # /api/*, /runs/*, /healthz to the backend so cookies stay same-origin (no CORS needed).
 set -euo pipefail
 cd "$(dirname "$0")"
-: "${BACKEND_URL:?set BACKEND_URL (the Mac's public https URL from deploy/mac/expose.sh)}"
+: "${BACKEND_URL:?set BACKEND_URL (the Mac public https URL from deploy/mac/expose.sh)}"
 BACKEND_URL="${BACKEND_URL%/}"
 mkdir -p public
 cp ../../src/phonepilot/service/static/app.html public/index.html

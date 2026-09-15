@@ -210,6 +210,17 @@ Session `5d7008187bb9` (1200 s, three tasks back to back, Gemini 2.5 Flash):
 5. Pre-granted runtime permissions / an option to start from a clean profile.
 6. Distinct error codes for "op does not exist" vs "op unsupported here".
 
+## `/op` is being retired → ADB is the primary transport
+
+Heard on 2026-09-14 evening that `POST /sessions/{sid}/op` is going away in
+favour of raw ADB. PhonePilot now defaults to `--transport adb` everywhere
+(CLI, local UI, multi-user service); the `/op` client stays as a legacy
+option until the endpoint disappears. Two consequences worth stating in the
+docs when that ships: (1) every client now needs `adb` installed (the Docker
+image and the Mac installer ship it), and (2) `GET /sessions/{sid}/frame.png`
+becomes the only HTTP way to *see* the phone — worth keeping, since it lets a
+dashboard show a phone that adb is currently driving from another process.
+
 ## ADB transport, in practice
 
 Once connected (see the docs mismatch above), stock adb against the redroid
