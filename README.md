@@ -104,6 +104,19 @@ token. Two users can never see each other's phone, frames, steps, or files;
 and the deployment (Docker + Caddy TLS, or `deploy/mac/install.sh` for an
 always-on Mac with a Cloudflare tunnel).
 
+### Hosted: Vercel frontend + Mac Studio backend
+
+The production layout used for this project: the backend (`phonepilot
+serve`, process sandboxes, adb) runs on a Mac Studio under launchd, published
+through a Cloudflare tunnel; the static pages are served by Vercel, whose
+`vercel.json` rewrites `/api/*`, `/runs/*` and `/healthz` to the backend so
+cookies stay same-origin. Vercel's rewrite proxy and the Cloudflare quick
+tunnel both buffer Server-Sent Events, so the page mints a short-lived stream
+token (`/api/events/token`) and opens the event stream directly against the
+backend; if no event arrives within 4 s it falls back to polling
+`/api/events/since`. See `deploy/mac/install.sh`, `deploy/mac/expose.sh`,
+`deploy/vercel/deploy.sh` and `docs/DEPLOY.md`.
+
 ### Command line
 
 ```bash
