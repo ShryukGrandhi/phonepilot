@@ -82,6 +82,17 @@ dependencies; all phone control still goes through the Cloud API.
 
 ![PhonePilot web UI](docs/web-ui.jpg)
 
+The hosted multi-user app (Vercel frontend, Mac Studio backend): one message
+with `@both` drives two phones, each in its own sandbox over ADB, live views
+side by side and per-phone badges in the shared log:
+
+![PhonePilot: two phones from one chat box](docs/two-phones.jpg)
+
+Single-phone multi-user mode, signed in as a user with their own keys and
+quota:
+
+![PhonePilot service](docs/service-ui.jpg)
+
 ### Multi-user service
 
 ```bash
