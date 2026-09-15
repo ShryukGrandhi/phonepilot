@@ -224,6 +224,8 @@ class ThreadBackend:
             pass
         server = self._servers.pop(sb.id, None)
         if server is not None:
+            import threading as _t
+            _t.Thread(target=server.shutdown, daemon=True).start()
             server.server_close()
 
     def alive(self, sb: Sandbox) -> bool:

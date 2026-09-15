@@ -124,9 +124,9 @@ class Auth:
             self._attempts.setdefault(key, []).append(time.time())
 
 
-def cookie_header(token: str, secure: bool, max_age: int = SESSION_TTL_S) -> str:
-    parts = [f"{COOKIE_NAME}={token}", "Path=/", "HttpOnly", "SameSite=Strict", f"Max-Age={max_age}"]
-    if secure:
+def cookie_header(token: str, secure: bool, max_age: int = SESSION_TTL_S, samesite: str = "Strict") -> str:
+    parts = [f"{COOKIE_NAME}={token}", "Path=/", "HttpOnly", f"SameSite={samesite}", f"Max-Age={max_age}"]
+    if secure or samesite == "None":
         parts.append("Secure")
     return "; ".join(parts)
 

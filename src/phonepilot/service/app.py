@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from ..cloud import CloudError
 from .auth import Auth, AuthError, clear_cookie_header, cookie_header, COOKIE_NAME
+import os
 from .runtime import ConfigError, KeyResolver, Limits, Pool, QuotaError, Registry, UserRuntime
 from .sandbox import SandboxError, pick_backend
 from .secrets import SecretBox
@@ -45,8 +46,11 @@ SECURITY_HEADERS = {
 class Service:
     def __init__(self, data_dir: Path, master_key: str | None = None, limits: Limits | None = None,
                  pool: Pool | None = None, secure_cookies: bool = False, trust_proxy: bool = False,
-                 log: Callable[[str], None] = print, backend: Any = None, sandbox: str | None = None):
+                 log: Callable[[str], None] = print, backend: Any = None, sandbox: str | None = None,
+                 allowed_origins: tuple[str, ...] | None = None):
         self.data_dir = data_dir
+        env_origins = tuple(o.strip() for o in os.environ.get("PHONEPILOT_ALLOWED_ORIGINS", "").split(",") if o.strip())
+        self.allowed_origins = tuple(allowed_origins) if allowed_origins is not None else env_origins
         self.store = Store(data_dir / "phonepilot.sqlite3")
         self.box = SecretBox(master_key)
         self.auth = Auth(self.store)
@@ -103,11 +107,32 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _cors_headers(self) -> dict[str, str]:
+        origin = self.headers.get("Origin")
+        if origin and origin in self.svc.allowed_origins:
+            return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Headers": f"Content-Type, {CSRF_HEADER}",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Vary": "Origin"}
+        return {}
+
+    def _cookie(self, token: str) -> str:
+        cross_site = bool(self.svc.allowed_origins)
+        return cookie_header(token, self.svc.secure_cookies or cross_site, samesite="None" if cross_site else "Strict")
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        for k, v in self._cors_headers().items():
+            self.send_header(k, v)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _send(self, status: int, body: bytes, ctype: str, extra: dict[str, str] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, v)
+        for k, v in self._cors_headers().items():
             self.send_header(k, v)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
@@ -125,6 +150,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _static(self, name: str) -> None:
         self._send(200, (STATIC / name).read_bytes(), "text/html; charset=utf-8", {"Cache-Control": "no-store"})
+
+    def _query(self) -> dict[str, str]:
+        from urllib.parse import parse_qs, urlsplit
+
+        q = parse_qs(urlsplit(self.path).query)
+        return {k: v[0] for k, v in q.items() if v}
 
     # ---------------------------------------------------------------- GET
     def do_GET(self) -> None:
@@ -147,12 +178,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/events":
             return self._sse(rt)
         if path == "/api/frame.png":
-            return self._frame(rt)
+            return self._frame(rt, self._query().get("phone"))
         if path.startswith("/runs/"):
-            parts = path[len("/runs/"):].split("/", 1)
-            if len(parts) != 2:
+            parts = path[len("/runs/"):].split("/", 2)   # <slot>/<run dir>/<file...>
+            if len(parts) != 3:
                 return self._json(404, {"error": "not found"})
-            target = rt.run_file(parts[0], parts[1])
+            target = rt.run_file(f"{parts[0]}/{parts[1]}", parts[2])
             if target is None:
                 return self._json(404, {"error": "not found"})
             ctype = {"png": "image/png", "html": "text/html; charset=utf-8", "json": "application/json",
@@ -160,15 +191,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, target.read_bytes(), ctype, {"Cache-Control": "private, max-age=3600"})
         self._json(404, {"error": f"no route GET {path}"})
 
-    def _frame(self, rt: UserRuntime) -> None:
+    def _frame(self, rt: UserRuntime, slot: str | None) -> None:
         try:
-            png = rt.frame()
+            png = rt.frame(slot)
         except LookupError as exc:
             return self._json(404, {"error": str(exc)})
         except PermissionError as exc:
             return self._json(403, {"error": str(exc)})
-        except CloudError as exc:
-            return self._json(502, {"error": "phone service error"})
+        except (CloudError, ValueError):
+            return self._json(404, {"error": "no frame"})
         self._send(200, png, "image/png", {"Cache-Control": "no-store"})
 
     def _sse(self, rt: UserRuntime) -> None:
@@ -214,11 +245,11 @@ class Handler(BaseHTTPRequestHandler):
                 login = self.svc.auth.signup(str(body.get("email", "")), str(body.get("password", "")),
                                              (body.get("invite") or None), ip)
                 return self._json(200, {"ok": True, "email": login.user.email, "is_admin": login.user.is_admin},
-                                  {"Set-Cookie": cookie_header(login.token, self.svc.secure_cookies)})
+                                  {"Set-Cookie": self._cookie(login.token)})
             if path == "/api/auth/login":
                 login = self.svc.auth.login(str(body.get("email", "")), str(body.get("password", "")), ip)
                 return self._json(200, {"ok": True, "email": login.user.email},
-                                  {"Set-Cookie": cookie_header(login.token, self.svc.secure_cookies)})
+                                  {"Set-Cookie": self._cookie(login.token)})
             if path == "/api/auth/logout":
                 self.svc.auth.logout(self._cookie_token())
                 return self._json(200, {"ok": True}, {"Set-Cookie": clear_cookie_header()})
@@ -239,16 +270,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, "keys": self.svc.keys.summary(rt.user.id)})
             if path == "/api/admin/invite":
                 return self._json(200, {"ok": True, "invite": self.svc.auth.create_invite(rt.user)})
+            slot = body.get("phone") or None
             if path == "/api/session/start":
-                rt.start_session(body.get("timeout_seconds"))
+                rt.start_session(slot, body.get("timeout_seconds"))
             elif path == "/api/session/attach":
-                rt.attach_session(str(body.get("session_id", "")).strip())
+                rt.attach_session(slot, str(body.get("session_id", "")).strip())
             elif path == "/api/session/end":
-                rt.end_session()
+                rt.end_session(slot)
             elif path == "/api/task":
-                rt.run_task(str(body.get("task", "")))
+                routed = rt.run_task(str(body.get("task", "")), slot)
+                return self._json(200, {"ok": True, "routed": routed, **rt.state()})
             elif path == "/api/task/stop":
-                rt.stop_task()
+                rt.stop_task(slot)
             else:
                 return self._json(404, {"error": f"no route POST {path}"})
         except (ConfigError, QuotaError, RuntimeError, ValueError, SandboxError) as exc:

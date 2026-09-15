@@ -95,9 +95,9 @@ def service(tmp_path, monkeypatch):
         return ScriptedBrain([Action("tap", {"element": 1}, "tap"), Action("done", {"success": True, "summary": "ok", "result": key[-4:]})])
 
     backend = ThreadBackend(client_factory, brain_factory, log=lambda m: None)
-    svc = Service(tmp_path / "data", master_key=MASTER, limits=Limits(max_phones_per_user=1, daily_phone_minutes=90,
+    svc = Service(tmp_path / "data", master_key=MASTER, limits=Limits(max_phones_per_user=2, daily_phone_minutes=90,
                                                                        max_steps=5, transport="http"), pool=Pool(None, None, None),
-                  backend=backend)
+                  backend=backend, allowed_origins=())
     server = make_server(svc, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield svc, server.server_address[1], phones
@@ -173,49 +173,56 @@ def test_isolation_between_two_users(service):
     b.js("POST", "/api/keys", {"provider": "gemini", "value": "AIzaSy_user_B_model_key_000000"})
     st, j = a.js("GET", "/api/state")
     assert j["keys"]["phone_harness"]["own"] == "pck_u…0000" and j["user"]["email"] == "a@x.io"
+    assert set(j["phones"]) == {"phone1", "phone2"} and j["phones"]["phone1"]["label"] == "Phone 1"
 
     # both start phones
     assert a.js("POST", "/api/session/start", {"timeout_seconds": 600})[0] == 200
     assert b.js("POST", "/api/session/start", {"timeout_seconds": 600})[0] == 200
-    rt_a, rt_b = svc.registry.get(svc.store.user_by_id(j and svc.store.user_by_email("a@x.io")[0].id)), None
     users = {u: svc.store.user_by_email(u)[0] for u in ("a@x.io", "b@x.io")}
-    rt_a, rt_b = svc.registry.get(users["a@x.io"]), svc.registry.get(users["b@x.io"])
+    ua, ub = svc.registry.get(users["a@x.io"]), svc.registry.get(users["b@x.io"])
+    rt_a, rt_b = ua.phones["phone1"], ub.phones["phone1"]
     assert wait_for(lambda: rt_a.status == "ready" and rt_b.status == "ready", timeout=10)
     assert rt_a.session_id == "phoneA" and rt_b.session_id == "phoneB"
-    assert rt_a.sandbox.id != rt_b.sandbox.id and rt_a.sandbox.token != rt_b.sandbox.token, "one sandbox per user"
-    assert a.js("POST", "/api/session/start", {})[0] == 409, "one phone per user"
+    assert rt_a.sandbox.id != rt_b.sandbox.id and rt_a.sandbox.token != rt_b.sandbox.token, "one sandbox per phone"
+    assert a.js("POST", "/api/session/start", {"phone": "phone1"})[0] == 409, "slot already in use"
+    assert a.js("POST", "/api/session/start", {"phone": "phone9"})[0] == 409, "unknown slot"
 
     # frames come from each user's own phone
-    _, _, fa = a.call("GET", "/api/frame.png")
-    _, _, fb = b.call("GET", "/api/frame.png")
+    _, _, fa = a.call("GET", "/api/frame.png?phone=phone1")
+    _, _, fb = b.call("GET", "/api/frame.png?phone=phone1")
     assert fa != fb
+    assert a.call("GET", "/api/frame.png?phone=phone2")[0] == 404, "empty slot has no frame"
 
     # B cannot attach A's phone (even knowing the id); A cannot see B's session id anywhere
-    b.js("POST", "/api/session/end", {})
+    b.js("POST", "/api/session/end", {"phone": "phone1"})
     assert wait_for(lambda: rt_b.status == "no_phone", timeout=10)
-    st, j = b.js("POST", "/api/session/attach", {"session_id": "phoneA"})
+    st, j = b.js("POST", "/api/session/attach", {"session_id": "phoneA", "phone": "phone1"})
     assert st == 403
     assert "phoneB" not in json.dumps(a.js("GET", "/api/state")[1])
 
     # A runs a task; the result carries A's model key suffix, so it used A's brain
-    assert a.js("POST", "/api/task", {"task": "tap it"})[0] == 200
-    assert wait_for(lambda: any(e["kind"] == "outcome" for e in list(rt_a.hub.history)) and rt_a.status == "ready", timeout=15)
-    outcome = next(e for e in list(rt_a.hub.history) if e["kind"] == "outcome")
-    assert outcome["success"] and outcome["result"] == "0000"
-    step = next(e for e in list(rt_a.hub.history) if e["kind"] == "step")
-    assert step["marked_url"].startswith("/runs/")
+    st, j = a.js("POST", "/api/task", {"task": "@1 tap it"})
+    assert st == 200 and j["routed"] == {"phone1": "ok"}
+    assert wait_for(lambda: any(e["kind"] == "outcome" for e in list(ua.hub.history)) and rt_a.status == "ready", timeout=15)
+    outcome = next(e for e in list(ua.hub.history) if e["kind"] == "outcome")
+    assert outcome["success"] and outcome["result"] == "0000" and outcome["phone"] == "phone1"
+    step = next(e for e in list(ua.hub.history) if e["kind"] == "step")
+    assert step["marked_url"].startswith("/runs/phone1/") and step["phone"] == "phone1"
+    st, j = a.js("POST", "/api/task", {"task": "@2 nothing"})
+    assert st == 409 and "not ready" in j["error"], "routing to an empty slot fails cleanly"
+    assert a.js("POST", "/api/task", {"task": "@7 x"})[0] == 409
     assert ("input.tap", {"x": 100, "y": 100}) in phones.a.ops_log and not any(op == "input.tap" for op, _ in phones.b.ops_log)
 
     # B cannot read A's run files, A can; B's event stream never saw A's events
     assert a.call("GET", step["marked_url"])[0] == 200
     assert b.call("GET", step["marked_url"])[0] == 404
-    assert not any(e["kind"] in ("step", "outcome") for e in list(rt_b.hub.history))
+    assert not any(e["kind"] in ("step", "outcome") for e in list(ub.hub.history))
     assert wait_for(lambda: [r["task"] for r in a.js("GET", "/api/runs")[1]["runs"]] == ["tap it"], timeout=5)
     assert b.js("GET", "/api/runs")[1]["runs"] == []
 
     # path traversal
     assert a.call("GET", "/runs/../../phonepilot.sqlite3")[0] == 404
-    assert a.call("GET", f"/runs/{step['marked_url'].split('/')[2]}/../../../phonepilot.sqlite3")[0] == 404
+    assert a.call("GET", f"/runs/phone1/{step['marked_url'].split('/')[3]}/../../../../phonepilot.sqlite3")[0] == 404
 
     # logout invalidates the cookie
     a.js("POST", "/api/auth/logout", {})
@@ -228,12 +235,14 @@ def test_isolation_between_two_users(service):
 
 def test_stale_no_phone_snapshot_does_not_cancel_a_pending_start(tmp_path):
     """The sandbox's initial 'hello' (status no_phone) can arrive after we asked it to start; it must be ignored."""
-    from phonepilot.service.runtime import KeyResolver, Limits, Pool, UserRuntime
+    from phonepilot.service.runtime import KeyResolver, Limits, Pool, PhoneRuntime
     from phonepilot.service.store import Store
+    from phonepilot.web.server import Hub
 
     store = Store(tmp_path / "db.sqlite3")
     user = store.create_user("a@x.io", b"h", b"s")
-    rt = UserRuntime(user, store, KeyResolver(store, SecretBox(MASTER), Pool(None, None, None)), Limits(), tmp_path, backend=None)
+    rt = PhoneRuntime("phone1", user, store, KeyResolver(store, SecretBox(MASTER), Pool(None, None, None)), Limits(), tmp_path,
+                      backend=None, hub=Hub())
     rt.status = "starting"
     rt._start_pending = True
     rt._absorb_state({"status": "no_phone", "session_id": None})      # stale snapshot
@@ -280,3 +289,44 @@ def test_security_headers_present(service):
     assert resp.getheader("Content-Security-Policy", "").startswith("default-src 'self'")
     assert resp.getheader("X-Frame-Options") == "DENY" and resp.getheader("X-Content-Type-Options") == "nosniff"
     conn.close()
+
+
+def test_two_phones_one_user_both_routing(service):
+    svc, port, phones = service
+    a = Browser(port)
+    a.js("POST", "/api/auth/signup", {"email": "a@x.io", "password": "correct horse battery"})
+    a.js("POST", "/api/keys", {"provider": "phone_harness", "value": "pck_userA_key_000000000000"})
+    a.js("POST", "/api/keys", {"provider": "gemini", "value": "AIzaSy_user_A_model_key_000000"})
+    assert a.js("POST", "/api/session/start", {"phone": "phone1"})[0] == 200
+    assert a.js("POST", "/api/session/start", {"phone": "phone2"})[0] == 200
+    ua = svc.registry.get(svc.store.user_by_email("a@x.io")[0])
+    assert wait_for(lambda: all(p.status == "ready" for p in ua.phones.values()), timeout=10)
+    assert ua.phones["phone1"].sandbox.id != ua.phones["phone2"].sandbox.id
+    st, j = a.js("POST", "/api/task", {"task": "do it", "phone": "both"})
+    assert st == 200 and j["routed"] == {"phone1": "ok", "phone2": "ok"}
+    assert wait_for(lambda: sum(1 for e in list(ua.hub.history) if e["kind"] == "outcome") == 2, timeout=20)
+    outcomes = [e for e in list(ua.hub.history) if e["kind"] == "outcome"]
+    assert {o["phone"] for o in outcomes} == {"phone1", "phone2"}
+    steps = [e for e in list(ua.hub.history) if e["kind"] == "step"]
+    assert {s["marked_url"].split("/")[2] for s in steps} == {"phone1", "phone2"}, "each slot writes its own run folder"
+    for sref in steps:
+        assert a.call("GET", sref["marked_url"])[0] == 200
+    runs = a.js("GET", "/api/runs")[1]["runs"]
+    assert len(runs) == 2 and {r["dir"].split("/")[0] for r in runs} == {"phone1", "phone2"}
+    a.js("POST", "/api/session/end", {"phone": "phone2"})
+    assert wait_for(lambda: ua.phones["phone2"].status == "no_phone", timeout=10)
+    assert ua.phones["phone1"].status == "ready", "ending one slot leaves the other alone"
+
+
+def test_route_task_parser():
+    from phonepilot.service.runtime import route_task
+
+    S = ("phone1", "phone2")
+    assert route_task("@2 open settings", None, S) == (("phone2",), "open settings")
+    assert route_task("@BOTH hi", "phone1", S) == (S, "hi")
+    assert route_task("phone 1: x", "phone2", S) == (("phone1",), "x")
+    assert route_task("p2:y", None, S) == (("phone2",), "y")
+    assert route_task("plain", "phone2", S) == (("phone2",), "plain")
+    assert route_task("plain", "both", S) == (S, "plain")
+    with pytest.raises(ValueError):
+        route_task("@3 nope", None, S)
