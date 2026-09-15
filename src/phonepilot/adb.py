@@ -19,6 +19,7 @@ top of that it has what the HTTP ops deliberately do not: `shell()`, `grant()`, 
 from __future__ import annotations
 
 import io
+import os
 import re
 import shutil
 import socket
@@ -170,6 +171,8 @@ class AdbTunnel:
     def close(self, revoke: bool = True) -> None:
         try:
             _run(["adb", "disconnect", self.serial], timeout=15, check=False)
+            if os.environ.get("ANDROID_ADB_SERVER_PORT"):
+                _run(["adb", "kill-server"], timeout=15, check=False)  # this sandbox's private adb daemon
         except AdbError:
             pass
         if self._ssh and self._ssh.poll() is None:

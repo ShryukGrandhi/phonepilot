@@ -90,8 +90,10 @@ browser ──cookie──▶ web tier (auth, ownership, quotas, run files)
   port is published on 127.0.0.1 only.
 - `PHONEPILOT_SANDBOX=process`: same protocol, a `phonepilot sandbox`
   subprocess per session with the same env discipline (the master key and
-  pool keys are stripped from its environment). Weaker boundary (shared
-  kernel and filesystem), zero extra dependencies. Use it on a Mac without
+  pool keys are stripped from its environment) and a **private adb server**
+  per sandbox (`ANDROID_ADB_SERVER_PORT`), so no process can address another
+  phone through a shared adb daemon. Weaker boundary than Docker (same OS
+  user, same filesystem), zero extra dependencies. Use it on a Mac without
   Docker, or in development.
 - The sandbox ends its phone when told to shut down, when it is stopped, or
   when the phone's deadline passes; an idle sandbox with no phone is reaped

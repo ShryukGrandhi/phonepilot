@@ -93,6 +93,9 @@ class ProcessBackend:
         env = {**os.environ, **spec.env, "PHONEPILOT_SANDBOX_TOKEN": token}
         for k in ("PHONEPILOT_MASTER_KEY", "PHONEPILOT_POOL_PHONE_KEY", "PHONEPILOT_POOL_GEMINI_KEY", "PHONEPILOT_POOL_ANTHROPIC_KEY"):
             env.pop(k, None)  # a sandbox never sees the master key or the pool
+        # a private adb server per sandbox: stock adb otherwise shares one daemon (port 5037) across
+        # all processes on the host, through which any of them could address any connected phone
+        env["ANDROID_ADB_SERVER_PORT"] = str(_free_port())
         cmd = [sys.executable, "-m", "phonepilot.cli", "sandbox", "--host", "127.0.0.1", "--port", str(port),
                "--runs-dir", str(spec.runs_dir), "--transport", spec.transport, "--max-steps", str(spec.max_steps),
                "--parent-pid", str(os.getpid())]
